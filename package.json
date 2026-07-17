@@ -13,7 +13,7 @@
     "@google/genai": "^2.12.0",
     "hyperframes": "^0.7.61",
     "mammoth": "^1.12.0",
-    "next": "16.2.10",
+    "next": "^9.3.3",
     "pdf-parse": "^2.4.5",
     "react": "19.2.4",
     "react-dom": "19.2.4",
