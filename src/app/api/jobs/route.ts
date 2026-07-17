@@ -100,7 +100,7 @@ async function processJob(
     throw new Error("Could not extract text from the document");
   }
 
-  // 2. Analyze with Gemini
+  // 2. Analyze through OpenRouter
   updateJob(jobId, { status: "analyzing", progress: 25 });
   const presentation = await analyzeReport(text, cfg.prompt, cfg.duration);
 
@@ -169,6 +169,7 @@ async function processJob(
     compositionPath,
     outputPath,
     fps: cfg.fps,
+    duration: outputDuration,
   });
 
   updateJob(jobId, {

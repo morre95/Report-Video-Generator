@@ -1,5 +1,11 @@
+import {
+  getOpenRouterHeaders,
+  OPENROUTER_TTS_MODEL,
+  openRouterUrl,
+  parseOpenRouterError,
+  parseOpenRouterResponseError,
+} from "@/lib/openrouter/client";
 import { config } from "@/lib/config";
-import { parseGeminiError } from "@/lib/gemini/client";
 import fs from "fs/promises";
 import path from "path";
 
@@ -8,43 +14,31 @@ export async function generateVoiceover(
   jobId: string,
   voice: string = "Charon"
 ): Promise<{ audioPath: string; durationSeconds: number }> {
-  const prompt = `You are a professional documentary narrator delivering a financial/technology report summary. 
-Speak in a clear, authoritative, measured pace. Use a warm but informative tone.
-Pause briefly between sections. Emphasize key numbers and percentages.`;
-
   try {
     const ttsResponse = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/interactions",
+      openRouterUrl("/audio/speech"),
       {
         method: "POST",
-        headers: {
-          "x-goog-api-key": config.geminiApiKey,
-          "Content-Type": "application/json",
-        },
+        headers: getOpenRouterHeaders(),
         body: JSON.stringify({
-          model: "gemini-3.1-flash-tts-preview",
-          input: `${prompt}\n\n${narrationScript}`,
-          response_format: { type: "audio" },
-          generation_config: {
-            speech_config: [{ voice }],
-          },
+          model: OPENROUTER_TTS_MODEL,
+          input: narrationScript,
+          voice,
+          response_format: "pcm",
         }),
       }
     );
 
     if (!ttsResponse.ok) {
-      const errText = await ttsResponse.text();
-      throw new Error(`TTS API error ${ttsResponse.status}: ${errText}`);
+      throw new Error(await parseOpenRouterResponseError(ttsResponse));
     }
 
-    const ttsResult: unknown = await ttsResponse.json();
-    const b64Audio = extractAudioData(ttsResult);
-    if (!b64Audio) {
+    const audioData = Buffer.from(await ttsResponse.arrayBuffer());
+    if (audioData.length === 0) {
       throw new Error(
-        "Gemini TTS completed without returning an audio payload."
+        "OpenRouter TTS completed without returning an audio payload."
       );
     }
-    const audioData = Buffer.from(b64Audio, "base64");
 
     const audioDir = path.join(config.dirs.audio, jobId);
     await fs.mkdir(audioDir, { recursive: true });
@@ -60,37 +54,10 @@ Pause briefly between sections. Emphasize key numbers and percentages.`;
 
     return { audioPath, durationSeconds };
   } catch (err: unknown) {
-    throw new Error(`Voiceover generation failed: ${parseGeminiError(err)}`);
+    throw new Error(
+      `Voiceover generation failed: ${parseOpenRouterError(err)}`
+    );
   }
-}
-
-function extractAudioData(result: unknown): string | undefined {
-  if (!result || typeof result !== "object") return undefined;
-
-  const response = result as {
-    output_audio?: { data?: unknown };
-    audioContent?: unknown;
-    steps?: Array<{
-      content?: Array<{ type?: unknown; data?: unknown }>;
-    }>;
-  };
-
-  if (typeof response.output_audio?.data === "string") {
-    return response.output_audio.data;
-  }
-  if (typeof response.audioContent === "string") {
-    return response.audioContent;
-  }
-
-  for (const step of response.steps ?? []) {
-    for (const content of step.content ?? []) {
-      if (content.type === "audio" && typeof content.data === "string") {
-        return content.data;
-      }
-    }
-  }
-
-  return undefined;
 }
 
 function wrapPcmInWav(pcmData: Buffer): Buffer {

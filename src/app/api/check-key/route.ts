@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { checkApiKey } from "@/lib/gemini/client";
+import { checkApiKey } from "@/lib/openrouter/client";
 
 export async function GET() {
   const result = await checkApiKey();

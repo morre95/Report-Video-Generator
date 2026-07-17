@@ -43,7 +43,7 @@ const VOICES = [
 ];
 
 export default function Home() {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [prompt, setPrompt] = useState("");
   const [duration, setDuration] = useState(60);
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("16:9");
@@ -52,13 +52,14 @@ export default function Home() {
   const [backgroundMusic, setBackgroundMusic] = useState("lofi7.mp3");
   const [musicFiles, setMusicFiles] = useState<string[]>([]);
   const [isMusicPreviewPlaying, setIsMusicPreviewPlaying] = useState(false);
+  const [allowWebSearch, setAllowWebSearch] = useState(false);
   const [job, setJob] = useState<JobState>({
     id: null,
     status: "idle",
     progress: 0,
     error: null,
   });
-  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -80,7 +81,7 @@ export default function Home() {
           ok: data.ok,
           error:
             data.error ??
-            (data.ok ? undefined : "The Gemini API health check failed."),
+            (data.ok ? undefined : "The OpenRouter API health check failed."),
         })
       )
       .catch(() =>
@@ -112,12 +113,29 @@ export default function Home() {
       .catch(() => setMusicFiles([]));
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const dropped = e.dataTransfer.files[0];
-    if (dropped) setFile(dropped);
+  const addFiles = useCallback((incoming: FileList | File[]) => {
+    const arr = Array.from(incoming);
+    if (arr.length === 0) return;
+    setFiles((prev) => {
+      const existing = new Set(prev.map((f) => `${f.name}:${f.size}`));
+      const deduped = arr.filter((f) => !existing.has(`${f.name}:${f.size}`));
+      return [...prev, ...deduped].slice(0, 10);
+    });
+    setSourceText("");
   }, []);
+
+  const removeFile = useCallback((index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragging(false);
+      addFiles(e.dataTransfer.files);
+    },
+    [addFiles]
+  );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -137,7 +155,7 @@ export default function Home() {
       setAspectRatio(data.config.aspectRatio);
       setVoice(data.config.voice);
       setFps(data.config.fps);
-      setFile(null);
+      setFiles([]);
     } catch {
       console.error("Failed to load demo");
     } finally {
@@ -160,11 +178,7 @@ export default function Home() {
 
         if (data.status === "complete") {
           if (pollRef.current) clearInterval(pollRef.current);
-          const htmlRes = await fetch(`/api/jobs/${jobId}/composition`);
-          if (htmlRes.ok) {
-            const html = await htmlRes.text();
-            setPreviewHtml(html);
-          }
+          setVideoUrl(`/api/jobs/${jobId}/render`);
         } else if (data.status === "error") {
           if (pollRef.current) clearInterval(pollRef.current);
         }
@@ -200,14 +214,16 @@ export default function Home() {
   }, [backgroundMusic]);
 
   const handleSubmit = useCallback(async () => {
-    if (!file && !sourceText) return;
+    if (files.length === 0 && !sourceText) return;
     if (!prompt.trim()) return;
 
     setJob({ id: null, status: "uploading", progress: 5, error: null });
-    setPreviewHtml(null);
+    setVideoUrl(null);
 
     const formData = new FormData();
-    if (file) formData.append("file", file);
+    for (const f of files) {
+      formData.append("files", f);
+    }
     if (sourceText) formData.append("sourceText", sourceText);
     formData.append("prompt", prompt);
     formData.append("duration", String(duration));
@@ -215,6 +231,7 @@ export default function Home() {
     formData.append("fps", String(fps));
     formData.append("voice", voice);
     formData.append("backgroundMusic", backgroundMusic);
+    formData.append("allowWebSearch", String(allowWebSearch));
 
     try {
       const res = await fetch("/api/jobs", { method: "POST", body: formData });
@@ -231,7 +248,7 @@ export default function Home() {
       });
     }
   }, [
-    file,
+    files,
     sourceText,
     prompt,
     duration,
@@ -239,6 +256,7 @@ export default function Home() {
     fps,
     voice,
     backgroundMusic,
+    allowWebSearch,
     pollJob,
   ]);
 
@@ -247,7 +265,7 @@ export default function Home() {
     job.status !== "complete" &&
     job.status !== "error";
 
-  const hasInput = !!(file || sourceText);
+  const hasInput = files.length > 0 || !!sourceText;
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "var(--bg-primary)" }}>
@@ -320,7 +338,7 @@ export default function Home() {
             <line x1="12" y1="16" x2="12.01" y2="16" />
           </svg>
           <div>
-            <p className="font-semibold">Gemini API key issue</p>
+            <p className="font-semibold">OpenRouter API key issue</p>
             <p className="mt-0.5 opacity-80">{apiKeyStatus.error}</p>
           </div>
         </div>
@@ -687,9 +705,9 @@ export default function Home() {
                 <p className="opacity-80 leading-relaxed whitespace-pre-wrap break-words">
                   {job.error}
                 </p>
-                {job.error.includes("aistudio.google.com") && (
+                {job.error.includes("openrouter.ai") && (
                   <a
-                    href="https://aistudio.google.com/apikey"
+                    href="https://openrouter.ai/keys"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-block mt-2 px-3 py-1.5 rounded-lg text-xs font-medium"
@@ -698,7 +716,7 @@ export default function Home() {
                       color: "var(--error)",
                     }}
                   >
-                    Open Google AI Studio &rarr;
+                    Open OpenRouter Keys &rarr;
                   </a>
                 )}
               </div>
@@ -708,69 +726,51 @@ export default function Home() {
 
         {/* Right panel — preview */}
         <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-auto">
-          {previewHtml ? (
+          {videoUrl ? (
             <div className="w-full max-w-5xl animate-fade-up">
               <div className="flex items-center justify-between mb-4">
                 <h2
                   className="text-lg font-semibold"
                   style={{ color: "var(--text-primary)" }}
                 >
-                  Composition Preview
+                  Video Preview
                 </h2>
-                <div className="flex gap-2">
-                  <a
-                    href={
-                      job.id ? `/api/jobs/${job.id}/render` : undefined
-                    }
-                    download="report-video.mp4"
-                    className="px-4 py-2 rounded-lg text-xs font-medium transition-all"
-                    style={{
-                      background: "var(--accent)",
-                      color: "#fff",
-                    }}
-                  >
-                    Download MP4
-                  </a>
-                  <button
-                    onClick={() => {
-                      const w = window.open("", "_blank");
-                      if (w) {
-                        w.document.write(previewHtml);
-                        w.document.close();
-                      }
-                    }}
-                    className="px-4 py-2 rounded-lg text-xs font-medium transition-all"
-                    style={{
-                      background: "var(--bg-tertiary)",
-                      border: "1px solid var(--border)",
-                      color: "var(--text-primary)",
-                    }}
-                  >
-                    Open Full Preview
-                  </button>
-                </div>
+                <a
+                  href={`${videoUrl}?download=1`}
+                  download="report-video.mp4"
+                  className="px-4 py-2 rounded-lg text-xs font-medium transition-all"
+                  style={{
+                    background: "var(--accent)",
+                    color: "#fff",
+                  }}
+                >
+                  Download MP4
+                </a>
               </div>
               <div
                 className="rounded-2xl overflow-hidden shadow-2xl"
                 style={{
                   border: "1px solid var(--border)",
+                  background: "#000",
                   aspectRatio: aspectRatio.replace(":", "/"),
                 }}
               >
-                <iframe
-                  srcDoc={previewHtml}
+                <video
+                  key={videoUrl}
+                  src={videoUrl}
+                  controls
+                  playsInline
                   className="w-full h-full"
-                  style={{ border: "none", background: "#000" }}
-                  sandbox="allow-scripts"
-                  title="Composition preview"
-                />
+                  style={{ display: "block", background: "#000" }}
+                >
+                  Your browser does not support video playback.
+                </video>
               </div>
               <p
                 className="text-xs mt-3 text-center"
                 style={{ color: "var(--text-secondary)" }}
               >
-                The Hyperframes render completed successfully. Download the
-                finished MP4 above.
+                Play the finished video here, or download the MP4.
               </p>
             </div>
           ) : isProcessing ? (
@@ -805,9 +805,9 @@ export default function Home() {
                 style={{ color: "var(--text-secondary)" }}
               >
                 {job.status === "analyzing"
-                  ? "Gemini is reading your document and designing the scene layout, charts, and narration script..."
+                  ? "OpenRouter is analyzing your document and designing the scene layout, charts, and narration script..."
                   : job.status === "generating_tts"
-                    ? "Generating professional voiceover narration with Gemini TTS..."
+                    ? "Generating professional voiceover narration through OpenRouter..."
                     : job.status === "composing"
                       ? "Building the Hyperframes HTML composition with animated charts and visuals..."
                       : job.status === "rendering"

@@ -1,4 +1,10 @@
-import { getGeminiClient, parseGeminiError } from "@/lib/gemini/client";
+import {
+  getOpenRouterHeaders,
+  OPENROUTER_CHAT_MODEL,
+  openRouterUrl,
+  parseOpenRouterError,
+  parseOpenRouterResponseError,
+} from "@/lib/openrouter/client";
 import type { PresentationData } from "@/lib/types";
 
 export async function analyzeReport(
@@ -77,25 +83,42 @@ JSON SCHEMA:
   "narrationScript": "string - the complete narration script, all scenes concatenated"
 }`;
 
-  let response;
+  let raw: string;
   try {
-    const ai = getGeminiClient();
-    response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: `${userPrompt}\n\nSOURCE DOCUMENT:\n\n${sourceText.slice(0, 30000)}`,
-      config: {
-        systemInstruction: systemPrompt,
+    const response = await fetch(openRouterUrl("/chat/completions"), {
+      method: "POST",
+      headers: getOpenRouterHeaders(),
+      body: JSON.stringify({
+        model: OPENROUTER_CHAT_MODEL,
+        messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `${userPrompt}\n\nSOURCE DOCUMENT:\n\n${sourceText.slice(0, 30000)}`,
+          },
+        ],
+        response_format: { type: "json_object" },
+        plugins: [{ id: "response-healing" }],
         temperature: 0.7,
-      },
+        max_tokens: 10_000,
+      }),
     });
+
+    if (!response.ok) {
+      throw new Error(await parseOpenRouterResponseError(response));
+    }
+
+    const completion = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string | null } }>;
+    };
+    raw = completion.choices?.[0]?.message?.content ?? "";
   } catch (err) {
-    throw new Error(parseGeminiError(err));
+    throw new Error(parseOpenRouterError(err));
   }
 
-  const raw = response.text ?? "";
   if (!raw.trim()) {
     throw new Error(
-      "Gemini returned an empty response. This can happen with rate limits or content filtering. Please retry."
+      "OpenRouter returned an empty response. This can happen with rate limits or content filtering. Please retry."
     );
   }
 
@@ -141,11 +164,11 @@ function extractJson<T>(raw: string): T {
 
   // 4. Log what we got for debugging and throw
   console.error(
-    "Failed to extract JSON from Gemini response. First 500 chars:",
+    "Failed to extract JSON from OpenRouter response. First 500 chars:",
     raw.slice(0, 500)
   );
   throw new Error(
-    "Gemini did not return valid JSON. " +
+    "OpenRouter did not return valid JSON. " +
       `Response starts with: "${raw.slice(0, 120).replace(/\n/g, "\\n")}..." — Please retry.`
   );
 }

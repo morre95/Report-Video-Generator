@@ -5,8 +5,8 @@ Transform reports and documents into animated video presentations with AI-genera
 ## Features
 
 - **Document Upload** — Drag-and-drop PDF, DOCX, TXT, or Markdown files
-- **AI Analysis** — Gemini extracts key metrics, charts, and creates a narration script
-- **Voiceover** — Gemini TTS generates professional narration with configurable voices
+- **AI Analysis** — Gemini 3.5 Flash through OpenRouter extracts key metrics, charts, and creates a narration script
+- **Voiceover** — Gemini 3.1 Flash TTS through OpenRouter generates professional narration with configurable voices
 - **Animated Compositions** — Hyperframes renders HTML/CSS/GSAP compositions with charts, KPIs, and transitions
 - **Background Music** — Lofi background music mixed at reduced volume under the voiceover
 - **Configurable** — Duration (15–300s), aspect ratio (16:9, 4:3, 9:16, 1:1), FPS, voice selection
@@ -16,7 +16,7 @@ Transform reports and documents into animated video presentations with AI-genera
 
 - **Node.js 22+** — [nodejs.org](https://nodejs.org/)
 - **FFmpeg** — `sudo apt install ffmpeg` (Debian/Ubuntu) or `brew install ffmpeg` (macOS)
-- **Gemini API Key** — [Google AI Studio](https://aistudio.google.com/apikey)
+- **OpenRouter API Key** — [OpenRouter Keys](https://openrouter.ai/keys) with available credits
 
 ## Setup
 
@@ -26,7 +26,7 @@ npm install
 
 # Copy environment template and add your API key
 cp .env.example .env.local
-# Edit .env.local with your GEMINI_API_KEY
+# Edit .env.local with your OPENROUTER_API_KEY
 
 # Verify Hyperframes dependencies
 npx hyperframes doctor
@@ -58,9 +58,11 @@ src/
   lib/
     config/               # Server-only configuration
     documents/            # PDF, DOCX, TXT extraction
-    gemini/
+    gemini/                 # Presentation analysis and TTS orchestration
       analyze.ts          # Report → structured presentation JSON
       tts.ts              # Narration → voiceover audio
+    openrouter/
+      client.ts           # OpenRouter authentication, models, and errors
     hyperframes/
       build-composition.ts  # Presentation data → animated HTML
       render.ts             # HTML → MP4 via Hyperframes CLI

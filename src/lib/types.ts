@@ -78,5 +78,6 @@ export interface JobConfig {
   fps: number;
   voice: string;
   backgroundMusic: string;
-  fileName: string;
+  fileNames: string[];
+  allowWebSearch: boolean;
 }

@@ -3,7 +3,7 @@ import path from "path";
 const ROOT = process.cwd();
 
 export const config = {
-  geminiApiKey: process.env.GEMINI_API_KEY ?? "",
+  openRouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
   dirs: {
     uploads: path.join(ROOT, ".runtime/uploads"),
     compositions: path.join(ROOT, ".runtime/compositions"),
@@ -22,6 +22,9 @@ export const config = {
   },
   limits: {
     maxFileSize: 20 * 1024 * 1024, // 20 MB
+    maxFileCount: 10,
+    maxTotalSize: 50 * 1024 * 1024, // 50 MB
+    maxCombinedChars: 200_000,
     allowedTypes: [
       "application/pdf",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

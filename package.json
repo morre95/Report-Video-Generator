@@ -10,7 +10,6 @@
     "test": "tsx --tsconfig tsconfig.json tests/smoke.ts"
   },
   "dependencies": {
-    "@google/genai": "^2.12.0",
     "hyperframes": "^0.7.61",
     "mammoth": "^1.12.0",
     "next": "16.2.10",
