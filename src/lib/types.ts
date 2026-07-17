@@ -74,6 +74,7 @@ export interface Job {
 export interface JobConfig {
   prompt: string;
   duration: number;
+  durationMode: "auto" | "manual";
   aspectRatio: "16:9" | "4:3" | "9:16" | "1:1";
   fps: number;
   voice: string;

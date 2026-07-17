@@ -31,7 +31,14 @@ export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const uploadedFiles = formData.getAll("files") as File[];
   const prompt = (formData.get("prompt") as string) ?? "";
-  const duration = parseInt((formData.get("duration") as string) ?? "60", 10);
+  const durationMode =
+    formData.get("durationMode") === "manual" ? "manual" : "auto";
+  const requestedDuration = parseInt(
+    (formData.get("duration") as string) ?? String(config.defaults.duration),
+    10
+  );
+  const duration =
+    durationMode === "manual" ? requestedDuration : config.defaults.duration;
   const aspectRatio = ((formData.get("aspectRatio") as string) ?? "16:9") as AspectRatio;
   const fps = parseInt((formData.get("fps") as string) ?? "30", 10);
   const voice = (formData.get("voice") as string) ?? config.defaults.voice;
@@ -51,6 +58,18 @@ export async function POST(req: NextRequest) {
   if (!prompt) {
     return NextResponse.json(
       { error: "Prompt is required" },
+      { status: 400 }
+    );
+  }
+
+  if (
+    durationMode === "manual" &&
+    (!Number.isFinite(requestedDuration) ||
+      requestedDuration < 15 ||
+      requestedDuration > 300)
+  ) {
+    return NextResponse.json(
+      { error: "Manual duration must be between 15 and 300 seconds" },
       { status: 400 }
     );
   }
@@ -97,6 +116,7 @@ export async function POST(req: NextRequest) {
     config: {
       prompt,
       duration,
+      durationMode,
       aspectRatio,
       fps,
       voice,
@@ -169,7 +189,8 @@ async function processJob(
     text,
     cfg.prompt,
     cfg.duration,
-    cfg.allowWebSearch
+    cfg.allowWebSearch,
+    cfg.durationMode
   );
 
   updateJob(jobId, { status: "generating_tts", progress: 45, presentation });
@@ -185,7 +206,7 @@ async function processJob(
   // Keep a short visual/music tail after the narrator finishes. If TTS runs
   // longer than requested, extend the render instead of cutting off speech.
   const outputDuration = Math.max(
-    cfg.duration,
+    presentation.totalDuration,
     Math.ceil(voiceoverDuration + 3)
   );
 

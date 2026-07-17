@@ -6,13 +6,20 @@ import {
   parseOpenRouterResponseError,
 } from "@/lib/openrouter/client";
 import { config } from "@/lib/config";
+import {
+  AUTO_DURATION_MAX_SECONDS,
+  AUTO_DURATION_MIN_SECONDS,
+  estimateAutoDuration,
+  type DurationMode,
+} from "@/lib/duration";
 import type { PresentationData } from "@/lib/types";
 
 export async function analyzeReport(
   sourceText: string,
   userPrompt: string,
   durationSeconds: number,
-  allowWebSearch: boolean = false
+  allowWebSearch: boolean = false,
+  durationMode: DurationMode = "manual"
 ): Promise<PresentationData> {
   const wordsPerMinute = 125;
   const endingHoldSeconds = Math.min(4, Math.max(2, durationSeconds * 0.06));
@@ -25,6 +32,19 @@ export async function analyzeReport(
     (narrationDuration / 60) * wordsPerMinute
   );
   const sceneCount = Math.max(4, Math.min(10, Math.round(durationSeconds / 8)));
+  const autoDuration = durationMode === "auto";
+  const sceneGuidance = autoDuration
+    ? `Create 4-10 scenes. Choose the number based on how much meaningful, well-supported information the sources contain.`
+    : `Create ${sceneCount} scenes that tell a complete story arc: hook, context, key findings, deep dives, a concise recap, and conclusion.`;
+  const narrationGuidance = autoDuration
+    ? `Choose an appropriate narrative scope between 65 and 360 words based on the source material and brief. Prefer a focused short video over padding, but include enough detail to tell a complete story.`
+    : `The narration script should be approximately ${targetNarrationWords} words. It must finish naturally before the video ends; do not exceed this budget.`;
+  const timingGuidance = autoDuration
+    ? `Recommend a totalDuration between ${AUTO_DURATION_MIN_SECONDS} and ${AUTO_DURATION_MAX_SECONDS} seconds that fits the narration and visuals. Scene durations must sum to that recommendation.`
+    : `Scene durations must sum to exactly ${durationSeconds}.`;
+  const closingGuidance = autoDuration
+    ? `The final scene MUST have type "closing", use roughly 10-15% of the recommended duration, and remain on screen after its narration finishes.`
+    : `The final scene MUST have type "closing", last approximately ${closingDuration} seconds, and remain on screen after its narration finishes.`;
 
   const webSearchGuidance = allowWebSearch
     ? `\n- The uploaded documents are your PRIMARY evidence. You may search the web for supplementary context (market comparisons, industry benchmarks, recent events) but never let web results contradict or replace document data.
@@ -39,12 +59,12 @@ You MUST return valid JSON matching the schema below. No markdown, no explanatio
 RULES:
 - Extract real numbers, percentages, and facts from the source. Never invent data.
 - Every claim should reference the source material.${webSearchGuidance}
-- Create ${sceneCount} scenes that tell a complete story arc: hook, context, key findings, deep dives, a concise recap, and conclusion.
-- The narration script should be approximately ${targetNarrationWords} words. It must finish naturally before the video ends; do not exceed this budget.
+- ${sceneGuidance}
+- ${narrationGuidance}
 - Include charts with real data from the source where appropriate. Use bars for comparisons, lines for trends, donuts for compositions.
 - Each scene's narration field should contain only that scene's portion of the script.
-- Scene durations must sum to exactly ${durationSeconds}.
-- The final scene MUST have type "closing", last approximately ${closingDuration} seconds, and remain on screen after its narration finishes.
+- ${timingGuidance}
+- ${closingGuidance}
 - The closing scene must summarize the main conclusion, include 2-3 concise factual takeaways in content.bullets, and end its narration with a complete, conclusive sentence. Do not introduce unsupported facts.
 - KPI scenes should highlight a single dramatic metric with year-over-year or quarter-over-quarter change.
 - Choose a color palette that fits the brand/topic (financial = deep blues/greens, tech = dark/neon, etc).
@@ -54,7 +74,7 @@ JSON SCHEMA:
   "title": "string - compelling title",
   "subtitle": "string - optional subtitle",
   "sourceAttribution": "string - credit line for the source document",
-  "totalDuration": ${durationSeconds},
+  "totalDuration": ${autoDuration ? `"number between ${AUTO_DURATION_MIN_SECONDS} and ${AUTO_DURATION_MAX_SECONDS}"` : durationSeconds},
   "colorPalette": {
     "primary": "#hex",
     "secondary": "#hex", 
@@ -169,7 +189,10 @@ JSON SCHEMA:
     }
   }
 
-  validatePresentation(parsed, durationSeconds);
+  const finalDuration = autoDuration
+    ? estimateAutoDuration(parsed.narrationScript, parsed.scenes.length)
+    : durationSeconds;
+  validatePresentation(parsed, finalDuration);
   return parsed;
 }
 

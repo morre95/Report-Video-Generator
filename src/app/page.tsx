@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 
 type AspectRatio = "16:9" | "4:3" | "9:16" | "1:1";
+type DurationMode = "auto" | "manual";
 type JobStatus =
   | "idle"
   | "uploading"
@@ -19,6 +20,7 @@ interface JobState {
   status: JobStatus;
   progress: number;
   error: string | null;
+  durationSeconds?: number;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -46,6 +48,7 @@ export default function Home() {
   const [files, setFiles] = useState<File[]>([]);
   const [prompt, setPrompt] = useState("");
   const [duration, setDuration] = useState(60);
+  const [durationMode, setDurationMode] = useState<DurationMode>("auto");
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("16:9");
   const [fps, setFps] = useState(30);
   const [voice, setVoice] = useState("Charon");
@@ -152,6 +155,7 @@ export default function Home() {
       setSourceText(data.sourceText);
       setPrompt(data.prompt);
       setDuration(data.config.duration);
+      setDurationMode(data.config.durationMode ?? "auto");
       setAspectRatio(data.config.aspectRatio);
       setVoice(data.config.voice);
       setFps(data.config.fps);
@@ -174,6 +178,7 @@ export default function Home() {
           status: data.status,
           progress: data.progress,
           error: data.error ?? null,
+          durationSeconds: data.presentation?.totalDuration,
         });
 
         if (data.status === "complete") {
@@ -227,6 +232,7 @@ export default function Home() {
     if (sourceText) formData.append("sourceText", sourceText);
     formData.append("prompt", prompt);
     formData.append("duration", String(duration));
+    formData.append("durationMode", durationMode);
     formData.append("aspectRatio", aspectRatio);
     formData.append("fps", String(fps));
     formData.append("voice", voice);
@@ -252,6 +258,7 @@ export default function Home() {
     sourceText,
     prompt,
     duration,
+    durationMode,
     aspectRatio,
     fps,
     voice,
@@ -503,25 +510,67 @@ export default function Home() {
                   className="block text-xs font-medium mb-1.5"
                   style={{ color: "var(--text-secondary)" }}
                 >
-                  Duration (seconds)
+                  Video Duration
                 </label>
-                <input
-                  type="number"
-                  min={15}
-                  max={300}
-                  value={duration}
-                  onChange={(e) =>
-                    setDuration(
-                      Math.max(15, Math.min(300, parseInt(e.target.value) || 60))
-                    )
-                  }
-                  className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none"
+                <div
+                  className="grid grid-cols-2 rounded-lg p-1"
                   style={{
                     background: "var(--bg-tertiary)",
                     border: "1px solid var(--border)",
-                    color: "var(--text-primary)",
                   }}
-                />
+                >
+                  {(["auto", "manual"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setDurationMode(mode)}
+                      aria-pressed={durationMode === mode}
+                      className="rounded-md px-2 py-1.5 text-xs font-medium transition-all"
+                      style={{
+                        background:
+                          durationMode === mode
+                            ? "var(--accent)"
+                            : "transparent",
+                        color:
+                          durationMode === mode
+                            ? "#fff"
+                            : "var(--text-secondary)",
+                      }}
+                    >
+                      {mode === "auto" ? "Auto" : "Manual"}
+                    </button>
+                  ))}
+                </div>
+                {durationMode === "manual" ? (
+                  <input
+                    type="number"
+                    min={15}
+                    max={300}
+                    value={duration}
+                    aria-label="Manual video duration in seconds"
+                    onChange={(e) =>
+                      setDuration(
+                        Math.max(
+                          15,
+                          Math.min(300, parseInt(e.target.value) || 60)
+                        )
+                      )
+                    }
+                    className="w-full rounded-lg px-3 py-2 text-sm focus:outline-none mt-2"
+                    style={{
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border)",
+                      color: "var(--text-primary)",
+                    }}
+                  />
+                ) : (
+                  <p
+                    className="text-[11px] mt-2 leading-relaxed"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    AI fits the story to 30–180 seconds.
+                  </p>
+                )}
               </div>
 
               <div>
@@ -814,7 +863,9 @@ export default function Home() {
                 className="text-xs mt-3 text-center"
                 style={{ color: "var(--text-secondary)" }}
               >
-                Play the finished video here, or download the MP4.
+                {durationMode === "auto" && job.durationSeconds
+                  ? `Auto selected ${Math.round(job.durationSeconds)} seconds. Play the finished video here, or download the MP4.`
+                  : "Play the finished video here, or download the MP4."}
               </p>
             </div>
           ) : isProcessing ? (

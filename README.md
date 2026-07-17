@@ -10,7 +10,8 @@ Transform reports and documents into animated video presentations with AI-genera
 - **Voiceover** — Gemini 3.1 Flash TTS through OpenRouter generates professional narration with configurable voices
 - **Animated Compositions** — Hyperframes renders HTML/CSS/GSAP compositions with charts, KPIs, and transitions
 - **Background Music** — Selectable background music mixed at reduced volume under the voiceover
-- **Configurable** — Duration (15–300s), aspect ratio (16:9, 4:3, 9:16, 1:1), FPS, voice selection
+- **Smart Duration** — Auto mode fits the finished story to 30–180 seconds from its narration and scene count; Manual mode supports 15–300 seconds
+- **Configurable** — Aspect ratio (16:9, 4:3, 9:16, 1:1), FPS, and voice selection
 - **NVIDIA Demo** — Pre-loaded Q1 FY2027 earnings demo
 
 ## Requirements
@@ -43,7 +44,7 @@ Open [http://localhost:3000](http://localhost:3000).
 1. Upload one or more reports (up to 10 files) or click **Load NVIDIA Q1 FY2027 Demo**
 2. Write a presentation brief describing the story you want
 3. Optionally enable **Allow online research** for supplementary web context (adds OpenRouter search charges)
-4. Adjust duration, aspect ratio, FPS, voice, and background music
+4. Keep the recommended **Auto** duration or choose **Manual**, then adjust aspect ratio, FPS, voice, and background music
 5. Click **Generate Video**
 6. Preview the video in-browser or download the MP4
 

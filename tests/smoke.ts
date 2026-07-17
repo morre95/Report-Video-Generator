@@ -1,4 +1,9 @@
 import { retimeScenes, estimateWordBudget } from "../src/lib/timing";
+import {
+  AUTO_DURATION_MAX_SECONDS,
+  AUTO_DURATION_MIN_SECONDS,
+  estimateAutoDuration,
+} from "../src/lib/duration";
 import { buildCompositionHtml } from "../src/lib/hyperframes/build-composition";
 import type { PresentationData, Scene } from "../src/lib/types";
 
@@ -69,6 +74,28 @@ console.log("\nestimateWordBudget:");
 assert(estimateWordBudget(60) === 140, "60s at 140wpm = 140 words");
 assert(estimateWordBudget(120) === 280, "120s at 140wpm = 280 words");
 assert(estimateWordBudget(30, 200) === 100, "30s at 200wpm = 100 words");
+
+// --- estimateAutoDuration ---
+console.log("\nestimateAutoDuration:");
+
+assert(
+  estimateAutoDuration("", 0) === AUTO_DURATION_MIN_SECONDS,
+  "empty narration uses the 30-second minimum"
+);
+assert(
+  estimateAutoDuration("word ".repeat(130), 6) === 73,
+  "130 words plus six-scene visual buffer produces 73 seconds"
+);
+assert(
+  estimateAutoDuration("word ".repeat(1_000), 10) ===
+    AUTO_DURATION_MAX_SECONDS,
+  "long narration is capped at 180 seconds"
+);
+assert(
+  estimateAutoDuration("word ".repeat(65), 4) >=
+    AUTO_DURATION_MIN_SECONDS,
+  "short presentations remain within the automatic range"
+);
 
 // --- buildCompositionHtml ---
 console.log("\nbuildCompositionHtml:");
