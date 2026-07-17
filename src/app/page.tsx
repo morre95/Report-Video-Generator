@@ -1,65 +1,738 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useCallback, useRef, useEffect } from "react";
+
+type AspectRatio = "16:9" | "4:3" | "9:16" | "1:1";
+type JobStatus =
+  | "idle"
+  | "uploading"
+  | "extracting"
+  | "analyzing"
+  | "generating_tts"
+  | "composing"
+  | "rendering"
+  | "complete"
+  | "error";
+
+interface JobState {
+  id: string | null;
+  status: JobStatus;
+  progress: number;
+  error: string | null;
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  idle: "Ready",
+  uploading: "Uploading document...",
+  extracting: "Extracting text...",
+  analyzing: "AI is analyzing your report...",
+  generating_tts: "Generating voiceover...",
+  composing: "Building video composition...",
+  rendering: "Rendering MP4...",
+  complete: "Complete!",
+  error: "Error",
+};
+
+const VOICES = [
+  { id: "Charon", label: "Charon", desc: "Informative" },
+  { id: "Kore", label: "Kore", desc: "Upbeat" },
+  { id: "Puck", label: "Puck", desc: "Upbeat" },
+  { id: "Zephyr", label: "Zephyr", desc: "Bright" },
+  { id: "Aoede", label: "Aoede", desc: "Warm" },
+  { id: "Fenrir", label: "Fenrir", desc: "Deep" },
+];
 
 export default function Home() {
+  const [file, setFile] = useState<File | null>(null);
+  const [prompt, setPrompt] = useState("");
+  const [duration, setDuration] = useState(60);
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>("16:9");
+  const [fps, setFps] = useState(30);
+  const [voice, setVoice] = useState("Charon");
+  const [job, setJob] = useState<JobState>({
+    id: null,
+    status: "idle",
+    progress: 0,
+    error: null,
+  });
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [sourceText, setSourceText] = useState("");
+  const [apiKeyStatus, setApiKeyStatus] = useState<{
+    checked: boolean;
+    ok: boolean;
+    error?: string;
+  }>({ checked: false, ok: true });
+
+  useEffect(() => {
+    fetch("/api/check-key")
+      .then((r) => r.json())
+      .then((data) =>
+        setApiKeyStatus({
+          checked: true,
+          ok: data.ok,
+          error:
+            data.error ??
+            (data.ok ? undefined : "The Gemini API health check failed."),
+        })
+      )
+      .catch(() =>
+        setApiKeyStatus({
+          checked: true,
+          ok: false,
+          error: "Could not reach the API key check endpoint.",
+        })
+      );
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const dropped = e.dataTransfer.files[0];
+    if (dropped) setFile(dropped);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback(() => setIsDragging(false), []);
+
+  const loadDemo = useCallback(async () => {
+    setDemoLoading(true);
+    try {
+      const res = await fetch("/api/demo");
+      const data = await res.json();
+      setSourceText(data.sourceText);
+      setPrompt(data.prompt);
+      setDuration(data.config.duration);
+      setAspectRatio(data.config.aspectRatio);
+      setVoice(data.config.voice);
+      setFps(data.config.fps);
+      setFile(null);
+    } catch {
+      console.error("Failed to load demo");
+    } finally {
+      setDemoLoading(false);
+    }
+  }, []);
+
+  const pollJob = useCallback((jobId: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`);
+        const data = await res.json();
+        setJob({
+          id: jobId,
+          status: data.status,
+          progress: data.progress,
+          error: data.error ?? null,
+        });
+
+        if (data.status === "complete") {
+          if (pollRef.current) clearInterval(pollRef.current);
+          const htmlRes = await fetch(`/api/jobs/${jobId}/composition`);
+          if (htmlRes.ok) {
+            const html = await htmlRes.text();
+            setPreviewHtml(html);
+          }
+        } else if (data.status === "error") {
+          if (pollRef.current) clearInterval(pollRef.current);
+        }
+      } catch {
+        // retry on next interval
+      }
+    }, 1500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const handleSubmit = useCallback(async () => {
+    if (!file && !sourceText) return;
+    if (!prompt.trim()) return;
+
+    setJob({ id: null, status: "uploading", progress: 5, error: null });
+    setPreviewHtml(null);
+
+    const formData = new FormData();
+    if (file) formData.append("file", file);
+    if (sourceText) formData.append("sourceText", sourceText);
+    formData.append("prompt", prompt);
+    formData.append("duration", String(duration));
+    formData.append("aspectRatio", aspectRatio);
+    formData.append("fps", String(fps));
+    formData.append("voice", voice);
+
+    try {
+      const res = await fetch("/api/jobs", { method: "POST", body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setJob({ id: data.jobId, status: "uploading", progress: 10, error: null });
+      pollJob(data.jobId);
+    } catch (err) {
+      setJob({
+        id: null,
+        status: "error",
+        progress: 0,
+        error: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  }, [file, sourceText, prompt, duration, aspectRatio, fps, voice, pollJob]);
+
+  const isProcessing =
+    job.status !== "idle" &&
+    job.status !== "complete" &&
+    job.status !== "error";
+
+  const hasInput = !!(file || sourceText);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <div className="min-h-screen flex flex-col" style={{ background: "var(--bg-primary)" }}>
+      {/* Header */}
+      <header
+        className="border-b px-8 py-5 flex items-center justify-between"
+        style={{ borderColor: "var(--border)", background: "var(--bg-secondary)" }}
+      >
+        <div className="flex items-center gap-4">
+          <div
+            className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-black text-lg"
+            style={{ background: "var(--accent)" }}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            V
+          </div>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight" style={{ color: "var(--text-primary)" }}>
+              Report Video Generator
+            </h1>
+            <p className="text-xs mt-0.5" style={{ color: "var(--text-secondary)" }}>
+              AI-powered document-to-video presentations
+            </p>
+          </div>
         </div>
-      </main>
+        <button
+          onClick={loadDemo}
+          disabled={demoLoading || isProcessing}
+          className="px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-40"
+          style={{
+            background: "var(--bg-tertiary)",
+            border: "1px solid var(--border)",
+            color: "var(--text-primary)",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderColor = "var(--accent)";
+            e.currentTarget.style.color = "var(--accent)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = "var(--border)";
+            e.currentTarget.style.color = "var(--text-primary)";
+          }}
+        >
+          {demoLoading ? "Loading..." : "Load NVIDIA Q1 FY2027 Demo"}
+        </button>
+      </header>
+
+      {/* API key error banner */}
+      {apiKeyStatus.checked && !apiKeyStatus.ok && (
+        <div
+          className="px-8 py-3 text-sm flex items-start gap-3"
+          style={{
+            background: "rgba(239, 68, 68, 0.08)",
+            borderBottom: "1px solid rgba(239, 68, 68, 0.2)",
+            color: "var(--error)",
+          }}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="flex-shrink-0 mt-0.5"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <div>
+            <p className="font-semibold">Gemini API key issue</p>
+            <p className="mt-0.5 opacity-80">{apiKeyStatus.error}</p>
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1 flex">
+        {/* Left panel — configuration */}
+        <div
+          className="w-[480px] flex-shrink-0 border-r overflow-y-auto"
+          style={{ borderColor: "var(--border)", background: "var(--bg-secondary)" }}
+        >
+          <div className="p-6 space-y-6">
+            {/* File upload */}
+            <div>
+              <label
+                className="block text-sm font-semibold mb-2"
+                style={{ color: "var(--text-primary)" }}
+              >
+                Source Document
+              </label>
+              <div
+                className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200 ${
+                  isDragging ? "scale-[1.01]" : ""
+                }`}
+                style={{
+                  borderColor: isDragging
+                    ? "var(--accent)"
+                    : hasInput
+                      ? "var(--success)"
+                      : "var(--border)",
+                  background: isDragging
+                    ? "rgba(99, 102, 241, 0.05)"
+                    : "var(--bg-tertiary)",
+                }}
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.docx,.txt,.md"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      setFile(f);
+                      setSourceText("");
+                    }
+                  }}
+                />
+                {hasInput ? (
+                  <div className="animate-fade-up">
+                    <div
+                      className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center"
+                      style={{ background: "rgba(34, 197, 94, 0.15)" }}
+                    >
+                      <svg
+                        width="24"
+                        height="24"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="var(--success)"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </div>
+                    <p className="font-medium" style={{ color: "var(--text-primary)" }}>
+                      {file ? file.name : "Demo source loaded"}
+                    </p>
+                    <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+                      {file
+                        ? `${(file.size / 1024).toFixed(1)} KB`
+                        : `${(sourceText.length / 1024).toFixed(1)} KB text`}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div
+                      className="w-14 h-14 rounded-full mx-auto mb-3 flex items-center justify-center"
+                      style={{ background: "rgba(99, 102, 241, 0.1)" }}
+                    >
+                      <svg
+                        width="28"
+                        height="28"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="var(--accent)"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                        <polyline points="17 8 12 3 7 8" />
+                        <line x1="12" y1="3" x2="12" y2="15" />
+                      </svg>
+                    </div>
+                    <p className="font-medium" style={{ color: "var(--text-primary)" }}>
+                      Drop your document here
+                    </p>
+                    <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+                      PDF, DOCX, TXT, or Markdown — up to 20 MB
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Prompt */}
+            <div>
+              <label
+                className="block text-sm font-semibold mb-2"
+                style={{ color: "var(--text-primary)" }}
+              >
+                Presentation Brief
+              </label>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={4}
+                placeholder="Describe the presentation you want. E.g.: 'Create an investor update highlighting revenue growth and key product launches...'"
+                className="w-full rounded-xl px-4 py-3 text-sm resize-none focus:outline-none transition-all"
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-primary)",
+                }}
+                onFocus={(e) =>
+                  (e.currentTarget.style.borderColor = "var(--accent)")
+                }
+                onBlur={(e) =>
+                  (e.currentTarget.style.borderColor = "var(--border)")
+                }
+              />
+            </div>
+
+            {/* Settings grid */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1.5"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Duration (seconds)
+                </label>
+                <input
+                  type="number"
+                  min={15}
+                  max={300}
+                  value={duration}
+                  onChange={(e) =>
+                    setDuration(
+                      Math.max(15, Math.min(300, parseInt(e.target.value) || 60))
+                    )
+                  }
+                  className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none"
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text-primary)",
+                  }}
+                />
+              </div>
+
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1.5"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Aspect Ratio
+                </label>
+                <select
+                  value={aspectRatio}
+                  onChange={(e) => setAspectRatio(e.target.value as AspectRatio)}
+                  className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none appearance-none"
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  <option value="16:9">16:9 (Landscape)</option>
+                  <option value="4:3">4:3 (Standard)</option>
+                  <option value="9:16">9:16 (Portrait)</option>
+                  <option value="1:1">1:1 (Square)</option>
+                </select>
+              </div>
+
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1.5"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  FPS
+                </label>
+                <select
+                  value={fps}
+                  onChange={(e) => setFps(parseInt(e.target.value))}
+                  className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none appearance-none"
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  <option value="24">24 fps</option>
+                  <option value="30">30 fps</option>
+                  <option value="60">60 fps</option>
+                </select>
+              </div>
+
+              <div>
+                <label
+                  className="block text-xs font-medium mb-1.5"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  Voice
+                </label>
+                <select
+                  value={voice}
+                  onChange={(e) => setVoice(e.target.value)}
+                  className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none appearance-none"
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border)",
+                    color: "var(--text-primary)",
+                  }}
+                >
+                  {VOICES.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.label} — {v.desc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Generate button */}
+            <button
+              onClick={handleSubmit}
+              disabled={(!hasInput || !prompt.trim()) || isProcessing}
+              className="w-full py-3.5 rounded-xl text-sm font-semibold transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{
+                background: isProcessing
+                  ? "var(--bg-tertiary)"
+                  : "var(--accent)",
+                color: "#fff",
+              }}
+            >
+              {isProcessing ? STATUS_LABELS[job.status] : "Generate Video"}
+            </button>
+
+            {/* Progress bar */}
+            {isProcessing && (
+              <div className="animate-fade-up">
+                <div className="flex items-center justify-between mb-2">
+                  <span
+                    className="text-xs font-medium"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    {STATUS_LABELS[job.status]}
+                  </span>
+                  <span
+                    className="text-xs font-mono"
+                    style={{ color: "var(--accent)" }}
+                  >
+                    {job.progress}%
+                  </span>
+                </div>
+                <div
+                  className="h-1.5 rounded-full overflow-hidden"
+                  style={{ background: "var(--bg-tertiary)" }}
+                >
+                  <div
+                    className="h-full rounded-full transition-all duration-700 ease-out"
+                    style={{
+                      width: `${job.progress}%`,
+                      background:
+                        "linear-gradient(90deg, var(--accent), var(--accent-hover))",
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Error display */}
+            {job.status === "error" && job.error && (
+              <div
+                className="rounded-xl p-4 text-sm animate-fade-up"
+                style={{
+                  background: "rgba(239, 68, 68, 0.08)",
+                  border: "1px solid rgba(239, 68, 68, 0.2)",
+                  color: "var(--error)",
+                }}
+              >
+                <p className="font-semibold mb-1">Generation failed</p>
+                <p className="opacity-80 leading-relaxed whitespace-pre-wrap break-words">
+                  {job.error}
+                </p>
+                {job.error.includes("aistudio.google.com") && (
+                  <a
+                    href="https://aistudio.google.com/apikey"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-block mt-2 px-3 py-1.5 rounded-lg text-xs font-medium"
+                    style={{
+                      background: "rgba(239, 68, 68, 0.15)",
+                      color: "var(--error)",
+                    }}
+                  >
+                    Open Google AI Studio &rarr;
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right panel — preview */}
+        <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-auto">
+          {previewHtml ? (
+            <div className="w-full max-w-5xl animate-fade-up">
+              <div className="flex items-center justify-between mb-4">
+                <h2
+                  className="text-lg font-semibold"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  Composition Preview
+                </h2>
+                <div className="flex gap-2">
+                  <a
+                    href={
+                      job.id ? `/api/jobs/${job.id}/render` : undefined
+                    }
+                    download="report-video.mp4"
+                    className="px-4 py-2 rounded-lg text-xs font-medium transition-all"
+                    style={{
+                      background: "var(--accent)",
+                      color: "#fff",
+                    }}
+                  >
+                    Download MP4
+                  </a>
+                  <button
+                    onClick={() => {
+                      const w = window.open("", "_blank");
+                      if (w) {
+                        w.document.write(previewHtml);
+                        w.document.close();
+                      }
+                    }}
+                    className="px-4 py-2 rounded-lg text-xs font-medium transition-all"
+                    style={{
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border)",
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    Open Full Preview
+                  </button>
+                </div>
+              </div>
+              <div
+                className="rounded-2xl overflow-hidden shadow-2xl"
+                style={{
+                  border: "1px solid var(--border)",
+                  aspectRatio: aspectRatio.replace(":", "/"),
+                }}
+              >
+                <iframe
+                  srcDoc={previewHtml}
+                  className="w-full h-full"
+                  style={{ border: "none", background: "#000" }}
+                  sandbox="allow-scripts"
+                  title="Composition preview"
+                />
+              </div>
+              <p
+                className="text-xs mt-3 text-center"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                The Hyperframes render completed successfully. Download the
+                finished MP4 above.
+              </p>
+            </div>
+          ) : isProcessing ? (
+            <div className="text-center animate-fade-up">
+              <div className="relative w-20 h-20 mx-auto mb-6">
+                <div
+                  className="absolute inset-0 rounded-full animate-spin"
+                  style={{
+                    border: "3px solid var(--border)",
+                    borderTopColor: "var(--accent)",
+                  }}
+                />
+                <div
+                  className="absolute inset-2 rounded-full"
+                  style={{ background: "var(--bg-primary)" }}
+                />
+                <div
+                  className="absolute inset-0 flex items-center justify-center text-2xl font-bold"
+                  style={{ color: "var(--accent)" }}
+                >
+                  {Math.round(job.progress)}
+                </div>
+              </div>
+              <p
+                className="text-lg font-semibold"
+                style={{ color: "var(--text-primary)" }}
+              >
+                {STATUS_LABELS[job.status]}
+              </p>
+              <p
+                className="text-sm mt-2 max-w-md mx-auto"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                {job.status === "analyzing"
+                  ? "Gemini is reading your document and designing the scene layout, charts, and narration script..."
+                  : job.status === "generating_tts"
+                    ? "Generating professional voiceover narration with Gemini TTS..."
+                    : job.status === "composing"
+                      ? "Building the Hyperframes HTML composition with animated charts and visuals..."
+                      : job.status === "rendering"
+                        ? "Rendering frames with Chromium and encoding MP4 with FFmpeg..."
+                        : "Processing your document..."}
+              </p>
+            </div>
+          ) : (
+            <div className="text-center max-w-lg">
+              <div
+                className="w-24 h-24 rounded-2xl mx-auto mb-6 flex items-center justify-center"
+                style={{ background: "rgba(99, 102, 241, 0.08)" }}
+              >
+                <svg
+                  width="48"
+                  height="48"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="var(--accent)"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polygon points="23 7 16 12 23 17 23 7" />
+                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                </svg>
+              </div>
+              <h2
+                className="text-2xl font-bold mb-3"
+                style={{ color: "var(--text-primary)" }}
+              >
+                Ready to generate
+              </h2>
+              <p className="text-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                Upload a report or load the NVIDIA demo, write a brief describing
+                what story the video should tell, and hit Generate. The AI will
+                design scenes with charts, KPIs, and a professional voiceover.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
