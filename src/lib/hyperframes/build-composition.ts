@@ -518,8 +518,36 @@ export function buildCompositionHtml(
 
     .closing-scene .subtext {
       font-size: 28px;
-      opacity: 0.5;
-      margin-top: 20px;
+      opacity: 0.65;
+      margin-top: 8px;
+      text-align: center;
+      max-width: 900px;
+    }
+
+    .closing-takeaways {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      width: min(1120px, 82%);
+      margin-top: 28px;
+    }
+
+    .closing-takeaway {
+      padding: 22px 24px;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.045);
+      font-size: 22px;
+      line-height: 1.35;
+      text-align: left;
+    }
+
+    .closing-takeaway::before {
+      content: '✓';
+      display: block;
+      margin-bottom: 10px;
+      color: var(--accent);
+      font: 700 18px 'JetBrains Mono', monospace;
     }
 
     .closing-pulse {
@@ -607,6 +635,15 @@ export function buildCompositionHtml(
       opacity: 0.5;
     }
 
+    .end-fade {
+      position: absolute;
+      inset: 0;
+      z-index: 20;
+      pointer-events: none;
+      opacity: 0;
+      background: var(--bg);
+    }
+
     /* Line chart */
     .line-chart-container {
       width: 80%;
@@ -659,6 +696,7 @@ export function buildCompositionHtml(
 ${scenesHtml}
 
     <div class="source-badge">${escHtml(data.sourceAttribution)}</div>
+    <div class="end-fade"></div>
 
 ${audioTags}
   </div>
@@ -749,6 +787,17 @@ function renderScene(
       <div class="scene-fg">
         <div class="headline">${escHtml(c.headline)}</div>
         ${c.subtext ? `<div class="subtext">${escHtml(c.subtext)}</div>` : ""}
+        ${
+          c.bullets?.length
+            ? `<div class="closing-takeaways">${c.bullets
+                .slice(0, 3)
+                .map(
+                  (bullet) =>
+                    `<div class="closing-takeaway">${escHtml(bullet)}</div>`
+                )
+                .join("")}</div>`
+            : ""
+        }
       </div>`;
       break;
   }
@@ -1012,7 +1061,8 @@ function buildTimeline(scenes: Scene[]): string {
     tl.from("${sel} .closing-pulse", { scale: 0.55, autoAlpha: 0, duration: ${d * 1.2}, ease: "power3.out" }, ${t});
     tl.to("${sel} .closing-pulse", { scale: 1.12, rotation: 12, duration: ${Math.max(0.4, scene.duration - d * 1.2)}, ease: "none" }, ${t + d * 1.2});
     tl.from("${sel} .headline", { scale: 0.9, autoAlpha: 0, duration: ${d}, ease: "power3.out" }, ${t + 0.3});
-    tl.from("${sel} .subtext", { y: 20, autoAlpha: 0, duration: ${d * 0.7} }, ${t + 0.8});`;
+    tl.from("${sel} .subtext", { y: 20, autoAlpha: 0, duration: ${d * 0.7} }, ${t + 0.8});
+    tl.from("${sel} .closing-takeaway", { y: 24, autoAlpha: 0, duration: 0.55, stagger: 0.14, ease: "power3.out" }, ${t + 1.1});`;
           break;
       }
       return anim;
@@ -1025,6 +1075,7 @@ function buildTimeline(scenes: Scene[]): string {
     tl.to(".orb-b", { x: 190, y: -90, scale: 1.12, duration: ${totalDuration}, ease: "sine.inOut" }, 0);
     tl.to(".ambient-line", { x: 180, stagger: 0.35, duration: ${totalDuration}, ease: "none" }, 0);
     tl.to(".data-dot", { y: -180, x: 70, stagger: 0.7, duration: ${Math.max(4, totalDuration * 0.55)}, ease: "sine.inOut" }, 0);
+    tl.to(".end-fade", { opacity: 1, duration: 1.5, ease: "power2.inOut" }, ${Math.max(0, totalDuration - 1.5)});
 ${animations}
 
     window.__timelines = window.__timelines || {};

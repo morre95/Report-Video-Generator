@@ -49,6 +49,9 @@ export default function Home() {
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("16:9");
   const [fps, setFps] = useState(30);
   const [voice, setVoice] = useState("Charon");
+  const [backgroundMusic, setBackgroundMusic] = useState("lofi7.mp3");
+  const [musicFiles, setMusicFiles] = useState<string[]>([]);
+  const [isMusicPreviewPlaying, setIsMusicPreviewPlaying] = useState(false);
   const [job, setJob] = useState<JobState>({
     id: null,
     status: "idle",
@@ -59,6 +62,7 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const musicPreviewRef = useRef<HTMLAudioElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [sourceText, setSourceText] = useState("");
   const [apiKeyStatus, setApiKeyStatus] = useState<{
@@ -86,6 +90,26 @@ export default function Home() {
           error: "Could not reach the API key check endpoint.",
         })
       );
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/music")
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load background music");
+        return response.json();
+      })
+      .then((data: { files?: string[] }) => {
+        const files = data.files ?? [];
+        setMusicFiles(files);
+        setBackgroundMusic((current) =>
+          files.includes(current)
+            ? current
+            : files.includes("lofi7.mp3")
+              ? "lofi7.mp3"
+              : files[0] || ""
+        );
+      })
+      .catch(() => setMusicFiles([]));
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -151,10 +175,29 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const musicPreview = musicPreviewRef.current;
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      musicPreview?.pause();
     };
   }, []);
+
+  const toggleMusicPreview = useCallback(async () => {
+    const player = musicPreviewRef.current;
+    if (!player || !backgroundMusic) return;
+
+    if (player.paused) {
+      try {
+        await player.play();
+        setIsMusicPreviewPlaying(true);
+      } catch {
+        setIsMusicPreviewPlaying(false);
+      }
+    } else {
+      player.pause();
+      setIsMusicPreviewPlaying(false);
+    }
+  }, [backgroundMusic]);
 
   const handleSubmit = useCallback(async () => {
     if (!file && !sourceText) return;
@@ -171,6 +214,7 @@ export default function Home() {
     formData.append("aspectRatio", aspectRatio);
     formData.append("fps", String(fps));
     formData.append("voice", voice);
+    formData.append("backgroundMusic", backgroundMusic);
 
     try {
       const res = await fetch("/api/jobs", { method: "POST", body: formData });
@@ -186,7 +230,17 @@ export default function Home() {
         error: err instanceof Error ? err.message : "Unknown error",
       });
     }
-  }, [file, sourceText, prompt, duration, aspectRatio, fps, voice, pollJob]);
+  }, [
+    file,
+    sourceText,
+    prompt,
+    duration,
+    aspectRatio,
+    fps,
+    voice,
+    backgroundMusic,
+    pollJob,
+  ]);
 
   const isProcessing =
     job.status !== "idle" &&
@@ -506,6 +560,69 @@ export default function Home() {
                   ))}
                 </select>
               </div>
+            </div>
+
+            <div>
+              <label
+                className="block text-xs font-medium mb-1.5"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                Background Music
+              </label>
+              <select
+                value={backgroundMusic}
+                onChange={(e) => {
+                  musicPreviewRef.current?.pause();
+                  setIsMusicPreviewPlaying(false);
+                  setBackgroundMusic(e.target.value);
+                }}
+                className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none appearance-none"
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border)",
+                  color: "var(--text-primary)",
+                }}
+              >
+                <option value="">No background music</option>
+                {musicFiles.map((fileName) => (
+                  <option key={fileName} value={fileName}>
+                    {fileName}
+                  </option>
+                ))}
+              </select>
+              <p
+                className="text-xs mt-1.5"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                Add MP3 files to public/audio, then reload this page.
+              </p>
+              {backgroundMusic && (
+                <div className="flex items-center gap-3 mt-3">
+                  <audio
+                    ref={musicPreviewRef}
+                    src={`/audio/${encodeURIComponent(backgroundMusic)}`}
+                    onEnded={() => setIsMusicPreviewPlaying(false)}
+                  />
+                  <button
+                    type="button"
+                    onClick={toggleMusicPreview}
+                    className="px-3 py-2 rounded-lg text-xs font-medium transition-all"
+                    style={{
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border)",
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    {isMusicPreviewPlaying ? "Pause preview" : "Listen to preview"}
+                  </button>
+                  <span
+                    className="text-xs truncate"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    {backgroundMusic}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Generate button */}

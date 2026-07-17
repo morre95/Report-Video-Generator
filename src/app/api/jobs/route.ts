@@ -11,6 +11,7 @@ import { buildCompositionHtml } from "@/lib/hyperframes/build-composition";
 import { renderComposition } from "@/lib/hyperframes/render";
 import { retimeScenes } from "@/lib/timing";
 import { setJob, updateJob, getJob, listJobs } from "@/lib/jobs/store";
+import { resolveBackgroundMusic } from "@/lib/music";
 import type { Job } from "@/lib/types";
 
 export async function GET() {
@@ -25,6 +26,8 @@ export async function POST(req: NextRequest) {
   const aspectRatio = ((formData.get("aspectRatio") as string) ?? "16:9") as AspectRatio;
   const fps = parseInt((formData.get("fps") as string) ?? "30", 10);
   const voice = (formData.get("voice") as string) ?? config.defaults.voice;
+  const backgroundMusic =
+    (formData.get("backgroundMusic") as string) ?? "";
   const sourceText = (formData.get("sourceText") as string) ?? "";
 
   if (!file && !sourceText) {
@@ -48,7 +51,15 @@ export async function POST(req: NextRequest) {
     id: jobId,
     status: "uploading",
     progress: 0,
-    config: { prompt, duration, aspectRatio, fps, voice, fileName },
+    config: {
+      prompt,
+      duration,
+      aspectRatio,
+      fps,
+      voice,
+      backgroundMusic,
+      fileName,
+    },
     createdAt: Date.now(),
   };
   setJob(job);
@@ -96,14 +107,23 @@ async function processJob(
   updateJob(jobId, { status: "generating_tts", progress: 45, presentation });
 
   // 3. Generate voiceover
-  const { audioPath } = await generateVoiceover(
-    presentation.narrationScript,
-    jobId,
-    cfg.voice
+  const { audioPath, durationSeconds: voiceoverDuration } =
+    await generateVoiceover(
+      presentation.narrationScript,
+      jobId,
+      cfg.voice
+    );
+
+  // Keep a short visual/music tail after the narrator finishes. If TTS runs
+  // longer than requested, extend the render instead of cutting off speech.
+  const outputDuration = Math.max(
+    cfg.duration,
+    Math.ceil(voiceoverDuration + 3)
   );
 
-  // 4. Retime scenes to match target duration
-  presentation.scenes = retimeScenes(presentation.scenes, cfg.duration);
+  // 4. Retime scenes to match the final render duration
+  presentation.scenes = retimeScenes(presentation.scenes, outputDuration);
+  presentation.totalDuration = outputDuration;
 
   // 5. Build composition
   updateJob(jobId, { status: "composing", progress: 60 });
@@ -116,21 +136,18 @@ async function processJob(
   const compositionVoiceoverPath = path.join(assetsDir, "voiceover.wav");
   await fs.copyFile(audioPath, compositionVoiceoverPath);
 
-  const configuredMusicPath = path.join(config.dirs.publicAudio, "lofi7.mp3");
   let compositionMusicSrc: string | undefined;
-  try {
-    await fs.access(configuredMusicPath);
-    const compositionMusicPath = path.join(assetsDir, "lofi7.mp3");
+  const configuredMusicPath = await resolveBackgroundMusic(
+    cfg.backgroundMusic
+  );
+  if (configuredMusicPath) {
+    const compositionMusicPath = path.join(assetsDir, "background-music.mp3");
     await fs.copyFile(configuredMusicPath, compositionMusicPath);
-    compositionMusicSrc = "assets/lofi7.mp3";
-  } catch {
-    console.warn(
-      "Background music skipped: public/audio/lofi7.mp3 was not found."
-    );
+    compositionMusicSrc = "assets/background-music.mp3";
   }
 
   const html = buildCompositionHtml(presentation, {
-    duration: cfg.duration,
+    duration: outputDuration,
     fps: cfg.fps,
     aspectRatio: cfg.aspectRatio,
     voiceoverPath: "assets/voiceover.wav",

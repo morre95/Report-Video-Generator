@@ -18,12 +18,19 @@ export async function extractText(filePath: string): Promise<string> {
 }
 
 async function extractPdf(filePath: string): Promise<string> {
-  const mod = await import("pdf-parse");
-  const parse = ((mod as Record<string, unknown>).default ?? mod) as unknown as
-    (buf: Buffer) => Promise<{ text: string }>;
+  const { getPath } = await import("pdf-parse/worker");
+  const { PDFParse } = await import("pdf-parse");
+  PDFParse.setWorker(getPath());
+
   const buffer = await fs.readFile(filePath);
-  const result = await parse(buffer);
-  return result.text;
+  const parser = new PDFParse({ data: buffer });
+
+  try {
+    const result = await parser.getText();
+    return result.text;
+  } finally {
+    await parser.destroy();
+  }
 }
 
 async function extractDocx(filePath: string): Promise<string> {

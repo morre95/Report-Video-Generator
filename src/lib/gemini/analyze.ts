@@ -6,9 +6,15 @@ export async function analyzeReport(
   userPrompt: string,
   durationSeconds: number
 ): Promise<PresentationData> {
-  const wordsPerMinute = 140;
+  const wordsPerMinute = 125;
+  const endingHoldSeconds = Math.min(4, Math.max(2, durationSeconds * 0.06));
+  const narrationDuration = Math.max(8, durationSeconds - endingHoldSeconds);
+  const closingDuration = Math.min(
+    10,
+    Math.max(6, Math.round(durationSeconds * 0.15))
+  );
   const targetNarrationWords = Math.round(
-    (durationSeconds / 60) * wordsPerMinute
+    (narrationDuration / 60) * wordsPerMinute
   );
   const sceneCount = Math.max(4, Math.min(10, Math.round(durationSeconds / 8)));
 
@@ -19,11 +25,13 @@ You MUST return valid JSON matching the schema below. No markdown, no explanatio
 RULES:
 - Extract real numbers, percentages, and facts from the source. Never invent data.
 - Every claim should reference the source material.
-- Create ${sceneCount} scenes that tell a coherent story arc: hook, context, key findings, deep dives, and conclusion.
-- The narration script should be exactly ~${targetNarrationWords} words for a ${durationSeconds}-second video at ${wordsPerMinute} WPM.
+- Create ${sceneCount} scenes that tell a complete story arc: hook, context, key findings, deep dives, a concise recap, and conclusion.
+- The narration script should be approximately ${targetNarrationWords} words. It must finish naturally before the video ends; do not exceed this budget.
 - Include charts with real data from the source where appropriate. Use bars for comparisons, lines for trends, donuts for compositions.
 - Each scene's narration field should contain only that scene's portion of the script.
 - Scene durations must sum to exactly ${durationSeconds}.
+- The final scene MUST have type "closing", last approximately ${closingDuration} seconds, and remain on screen after its narration finishes.
+- The closing scene must summarize the main conclusion, include 2-3 concise factual takeaways in content.bullets, and end its narration with a complete, conclusive sentence. Do not introduce unsupported facts.
 - KPI scenes should highlight a single dramatic metric with year-over-year or quarter-over-quarter change.
 - Choose a color palette that fits the brand/topic (financial = deep blues/greens, tech = dark/neon, etc).
 

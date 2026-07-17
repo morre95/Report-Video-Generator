@@ -77,5 +77,6 @@ export interface JobConfig {
   aspectRatio: "16:9" | "4:3" | "9:16" | "1:1";
   fps: number;
   voice: string;
+  backgroundMusic: string;
   fileName: string;
 }
