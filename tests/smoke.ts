@@ -182,6 +182,120 @@ const html43 = buildCompositionHtml(mockPresentation, {
 assert(html43.includes("data-width=\"1440\""), "4:3 uses width 1440");
 assert(html43.includes("data-height=\"1080\""), "4:3 uses height 1080");
 
+// --- buildBalancedSourceContext ---
+console.log("\nbuildBalancedSourceContext:");
+
+function buildBalancedSourceContext(
+  sources: { name: string; text: string }[],
+  maxChars: number
+): string {
+  if (sources.length === 0) return "";
+  if (sources.length === 1) {
+    const s = sources[0];
+    const trimmed = s.text.slice(0, maxChars);
+    return `=== SOURCE: ${s.name} ===\n${trimmed}`;
+  }
+  const perDoc = Math.floor(maxChars / sources.length);
+  const parts = sources.map((s) => {
+    const trimmed = s.text.slice(0, perDoc);
+    return `=== SOURCE: ${s.name} ===\n${trimmed}`;
+  });
+  return parts.join("\n\n");
+}
+
+assert(
+  buildBalancedSourceContext([], 1000) === "",
+  "empty sources → empty string"
+);
+
+assert(
+  buildBalancedSourceContext([{ name: "a.pdf", text: "hello" }], 1000).includes("=== SOURCE: a.pdf ==="),
+  "single source has header"
+);
+
+const twoSources = buildBalancedSourceContext(
+  [
+    { name: "a.pdf", text: "A".repeat(100) },
+    { name: "b.docx", text: "B".repeat(100) },
+  ],
+  120
+);
+assert(twoSources.includes("=== SOURCE: a.pdf ==="), "two sources: first header present");
+assert(twoSources.includes("=== SOURCE: b.docx ==="), "two sources: second header present");
+
+const longText = "X".repeat(500);
+const trimmed = buildBalancedSourceContext(
+  [
+    { name: "big.txt", text: longText },
+    { name: "small.txt", text: "tiny" },
+  ],
+  200
+);
+assert(
+  trimmed.length <= 300,
+  `budget is respected (got ${trimmed.length} chars, headers add overhead but body ≤ 200)`
+);
+
+assert(
+  !buildBalancedSourceContext(
+    [
+      { name: "a.txt", text: "A".repeat(200) },
+      { name: "b.txt", text: "B".repeat(200) },
+    ],
+    100
+  ).includes("A".repeat(100)),
+  "each source limited to fair share"
+);
+
+// --- file dedup logic ---
+console.log("\nfile dedup logic:");
+
+function deduplicateFiles(
+  prev: { name: string; size: number }[],
+  incoming: { name: string; size: number }[]
+): { name: string; size: number }[] {
+  const existing = new Set(prev.map((f) => `${f.name}:${f.size}`));
+  const deduped = incoming.filter((f) => !existing.has(`${f.name}:${f.size}`));
+  return [...prev, ...deduped].slice(0, 10);
+}
+
+const files1 = [{ name: "a.pdf", size: 100 }];
+const files2 = [{ name: "a.pdf", size: 100 }, { name: "b.pdf", size: 200 }];
+const merged = deduplicateFiles(files1, files2);
+assert(merged.length === 2, "dedup removes duplicate a.pdf");
+assert(merged[1].name === "b.pdf", "new file b.pdf is appended");
+
+const tooMany = Array.from({ length: 12 }, (_, i) => ({ name: `f${i}.pdf`, size: i }));
+assert(deduplicateFiles([], tooMany).length === 10, "max 10 files enforced");
+
+// --- OpenRouter web search request shape ---
+console.log("\nOpenRouter request shape:");
+
+function buildRequestBody(allowWebSearch: boolean): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: "google/gemini-3.5-flash",
+    messages: [],
+    response_format: { type: "json_object" },
+    plugins: [{ id: "response-healing" }],
+    temperature: 0.7,
+    max_tokens: 10_000,
+  };
+  if (allowWebSearch) {
+    body.tools = [{ type: "openrouter:web_search" }];
+  }
+  return body;
+}
+
+const withSearch = buildRequestBody(true);
+assert(
+  Array.isArray(withSearch.tools) &&
+    (withSearch.tools as Array<{ type: string }>)[0].type === "openrouter:web_search",
+  "web search enabled → tools array present"
+);
+
+const withoutSearch = buildRequestBody(false);
+assert(withoutSearch.tools === undefined, "web search disabled → no tools key");
+
 // --- Summary ---
 console.log(`\n${"=".repeat(40)}`);
 console.log(`Results: ${passed} passed, ${failed} failed`);

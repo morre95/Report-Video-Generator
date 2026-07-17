@@ -357,10 +357,10 @@ export default function Home() {
                 className="block text-sm font-semibold mb-2"
                 style={{ color: "var(--text-primary)" }}
               >
-                Source Document
+                Source Documents
               </label>
               <div
-                className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-200 ${
+                className={`relative border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-200 ${
                   isDragging ? "scale-[1.01]" : ""
                 }`}
                 style={{
@@ -383,72 +383,89 @@ export default function Home() {
                   type="file"
                   className="hidden"
                   accept=".pdf,.docx,.txt,.md"
+                  multiple
                   onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      setFile(f);
-                      setSourceText("");
-                    }
+                    if (e.target.files) addFiles(e.target.files);
+                    e.target.value = "";
                   }}
                 />
-                {hasInput ? (
+                {sourceText && files.length === 0 ? (
                   <div className="animate-fade-up">
                     <div
                       className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center"
                       style={{ background: "rgba(34, 197, 94, 0.15)" }}
                     >
-                      <svg
-                        width="24"
-                        height="24"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="var(--success)"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                     </div>
                     <p className="font-medium" style={{ color: "var(--text-primary)" }}>
-                      {file ? file.name : "Demo source loaded"}
+                      Demo source loaded
                     </p>
                     <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
-                      {file
-                        ? `${(file.size / 1024).toFixed(1)} KB`
-                        : `${(sourceText.length / 1024).toFixed(1)} KB text`}
+                      {(sourceText.length / 1024).toFixed(1)} KB text
                     </p>
                   </div>
                 ) : (
                   <>
                     <div
-                      className="w-14 h-14 rounded-full mx-auto mb-3 flex items-center justify-center"
-                      style={{ background: "rgba(99, 102, 241, 0.1)" }}
+                      className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center"
+                      style={{ background: files.length > 0 ? "rgba(34, 197, 94, 0.15)" : "rgba(99, 102, 241, 0.1)" }}
                     >
-                      <svg
-                        width="28"
-                        height="28"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="var(--accent)"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                        <polyline points="17 8 12 3 7 8" />
-                        <line x1="12" y1="3" x2="12" y2="15" />
-                      </svg>
+                      {files.length > 0 ? (
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      ) : (
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                          <polyline points="17 8 12 3 7 8" />
+                          <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                      )}
                     </div>
                     <p className="font-medium" style={{ color: "var(--text-primary)" }}>
-                      Drop your document here
+                      {files.length > 0
+                        ? `${files.length} file${files.length > 1 ? "s" : ""} selected`
+                        : "Drop your documents here"}
                     </p>
                     <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
-                      PDF, DOCX, TXT, or Markdown — up to 20 MB
+                      PDF, DOCX, TXT, or Markdown — up to 10 files, 20 MB each
                     </p>
                   </>
                 )}
               </div>
+
+              {files.length > 0 && (
+                <ul className="mt-2 space-y-1">
+                  {files.map((f, i) => (
+                    <li
+                      key={`${f.name}-${f.size}`}
+                      className="flex items-center justify-between rounded-lg px-3 py-1.5 text-xs"
+                      style={{ background: "var(--bg-tertiary)", color: "var(--text-primary)" }}
+                    >
+                      <span className="truncate mr-2">{f.name}</span>
+                      <span className="flex items-center gap-2 flex-shrink-0">
+                        <span style={{ color: "var(--text-secondary)" }}>
+                          {(f.size / 1024).toFixed(1)} KB
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeFile(i);
+                          }}
+                          className="hover:opacity-70 transition-opacity"
+                          style={{ color: "var(--error)" }}
+                          aria-label={`Remove ${f.name}`}
+                        >
+                          &times;
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
 
             {/* Prompt */}
@@ -641,6 +658,33 @@ export default function Home() {
                   </span>
                 </div>
               )}
+            </div>
+
+            {/* Web search opt-in */}
+            <div>
+              <label
+                className="flex items-start gap-3 cursor-pointer select-none"
+                style={{ color: "var(--text-primary)" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={allowWebSearch}
+                  onChange={(e) => setAllowWebSearch(e.target.checked)}
+                  className="mt-0.5 accent-[var(--accent)]"
+                  style={{ width: 16, height: 16 }}
+                />
+                <span>
+                  <span className="text-sm font-medium">Allow online research</span>
+                  <span
+                    className="block text-xs mt-0.5 leading-relaxed"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    Let the AI search the web for supplementary facts. Uploaded
+                    documents remain the primary source. Adds a small OpenRouter
+                    web-search charge.
+                  </span>
+                </span>
+              </label>
             </div>
 
             {/* Generate button */}

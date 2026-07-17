@@ -4,11 +4,12 @@ Transform reports and documents into animated video presentations with AI-genera
 
 ## Features
 
-- **Document Upload** — Drag-and-drop PDF, DOCX, TXT, or Markdown files
+- **Multi-Document Upload** — Drag-and-drop up to 10 PDF, DOCX, TXT, or Markdown files (20 MB each, 50 MB combined). Sources are deduplicated and text is balanced across a 200K-character budget so later files are not discarded.
 - **AI Analysis** — Gemini 3.5 Flash through OpenRouter extracts key metrics, charts, and creates a narration script
+- **Optional Web Research** — Tick "Allow online research" to let the AI search the web for supplementary context. Uploaded documents remain the primary source. Adds a small OpenRouter web-search charge per query.
 - **Voiceover** — Gemini 3.1 Flash TTS through OpenRouter generates professional narration with configurable voices
 - **Animated Compositions** — Hyperframes renders HTML/CSS/GSAP compositions with charts, KPIs, and transitions
-- **Background Music** — Lofi background music mixed at reduced volume under the voiceover
+- **Background Music** — Selectable background music mixed at reduced volume under the voiceover
 - **Configurable** — Duration (15–300s), aspect ratio (16:9, 4:3, 9:16, 1:1), FPS, voice selection
 - **NVIDIA Demo** — Pre-loaded Q1 FY2027 earnings demo
 
@@ -39,12 +40,12 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Usage
 
-1. Upload a report or click **Load NVIDIA Q1 FY2027 Demo**
+1. Upload one or more reports (up to 10 files) or click **Load NVIDIA Q1 FY2027 Demo**
 2. Write a presentation brief describing the story you want
-3. Adjust duration, aspect ratio, FPS, and voice
-4. Click **Generate Video**
-5. Preview the composition in-browser or download the HTML
-6. Render to MP4: `npx hyperframes render composition.html -o output.mp4`
+3. Optionally enable **Allow online research** for supplementary web context (adds OpenRouter search charges)
+4. Adjust duration, aspect ratio, FPS, voice, and background music
+5. Click **Generate Video**
+6. Preview the video in-browser or download the MP4
 
 ## Architecture
 

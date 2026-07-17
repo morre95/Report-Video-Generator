@@ -18,9 +18,18 @@ export async function GET() {
   return NextResponse.json({ jobs: listJobs() });
 }
 
+function sanitizeFileName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 200);
+}
+
+function validateFileExtension(name: string): boolean {
+  const ext = path.extname(name).toLowerCase();
+  return (config.limits.allowedExtensions as readonly string[]).includes(ext);
+}
+
 export async function POST(req: NextRequest) {
   const formData = await req.formData();
-  const file = formData.get("file") as File | null;
+  const uploadedFiles = formData.getAll("files") as File[];
   const prompt = (formData.get("prompt") as string) ?? "";
   const duration = parseInt((formData.get("duration") as string) ?? "60", 10);
   const aspectRatio = ((formData.get("aspectRatio") as string) ?? "16:9") as AspectRatio;
@@ -29,10 +38,12 @@ export async function POST(req: NextRequest) {
   const backgroundMusic =
     (formData.get("backgroundMusic") as string) ?? "";
   const sourceText = (formData.get("sourceText") as string) ?? "";
+  const allowWebSearch =
+    (formData.get("allowWebSearch") as string) === "true";
 
-  if (!file && !sourceText) {
+  if (uploadedFiles.length === 0 && !sourceText) {
     return NextResponse.json(
-      { error: "No file or source text provided" },
+      { error: "No files or source text provided" },
       { status: 400 }
     );
   }
@@ -44,8 +55,40 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (uploadedFiles.length > config.limits.maxFileCount) {
+    return NextResponse.json(
+      { error: `Maximum ${config.limits.maxFileCount} files allowed` },
+      { status: 400 }
+    );
+  }
+
+  let totalSize = 0;
+  for (const f of uploadedFiles) {
+    if (f.size > config.limits.maxFileSize) {
+      return NextResponse.json(
+        { error: `File "${f.name}" exceeds the ${config.limits.maxFileSize / 1024 / 1024} MB limit` },
+        { status: 400 }
+      );
+    }
+    if (!validateFileExtension(f.name)) {
+      return NextResponse.json(
+        { error: `Unsupported file type: "${f.name}". Allowed: ${config.limits.allowedExtensions.join(", ")}` },
+        { status: 400 }
+      );
+    }
+    totalSize += f.size;
+  }
+  if (totalSize > config.limits.maxTotalSize) {
+    return NextResponse.json(
+      { error: `Combined file size exceeds ${config.limits.maxTotalSize / 1024 / 1024} MB` },
+      { status: 400 }
+    );
+  }
+
   const jobId = uuid();
-  const fileName = file?.name ?? "demo-source.txt";
+  const fileNames = uploadedFiles.length > 0
+    ? uploadedFiles.map((f) => f.name)
+    : ["demo-source.txt"];
 
   const job: Job = {
     id: jobId,
@@ -58,13 +101,14 @@ export async function POST(req: NextRequest) {
       fps,
       voice,
       backgroundMusic,
-      fileName,
+      fileNames,
+      allowWebSearch,
     },
     createdAt: Date.now(),
   };
   setJob(job);
 
-  processJob(jobId, file, sourceText).catch((err) => {
+  processJob(jobId, uploadedFiles, sourceText).catch((err) => {
     console.error(`Job ${jobId} failed:`, err);
     updateJob(jobId, {
       status: "error",
@@ -77,32 +121,56 @@ export async function POST(req: NextRequest) {
 
 async function processJob(
   jobId: string,
-  file: File | null,
+  files: File[],
   preloadedText: string
 ) {
   const job = getJob(jobId)!;
   const cfg = job.config;
 
-  // 1. Extract text
   updateJob(jobId, { status: "extracting", progress: 10 });
-  let text = preloadedText;
 
-  if (file && !text) {
+  const sourceParts: { name: string; text: string }[] = [];
+
+  if (preloadedText) {
+    sourceParts.push({ name: "demo-source.txt", text: preloadedText });
+  }
+
+  if (files.length > 0) {
     const uploadDir = path.join(config.dirs.uploads, jobId);
     await fs.mkdir(uploadDir, { recursive: true });
-    const filePath = path.join(uploadDir, file.name);
-    const buffer = Buffer.from(await file.arrayBuffer());
-    await fs.writeFile(filePath, buffer);
-    text = await extractText(filePath);
+
+    for (const file of files) {
+      const safeName = sanitizeFileName(file.name);
+      const filePath = path.join(uploadDir, safeName);
+      const buffer = Buffer.from(await file.arrayBuffer());
+      await fs.writeFile(filePath, buffer);
+      try {
+        const text = await extractText(filePath);
+        if (text.trim()) {
+          sourceParts.push({ name: file.name, text });
+        }
+      } catch (err) {
+        throw new Error(
+          `Failed to extract text from "${file.name}": ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
   }
 
-  if (!text.trim()) {
-    throw new Error("Could not extract text from the document");
+  if (sourceParts.length === 0 || sourceParts.every((p) => !p.text.trim())) {
+    throw new Error("Could not extract text from any of the provided documents");
   }
+
+  const text = buildBalancedSourceContext(sourceParts, config.limits.maxCombinedChars);
 
   // 2. Analyze through OpenRouter
   updateJob(jobId, { status: "analyzing", progress: 25 });
-  const presentation = await analyzeReport(text, cfg.prompt, cfg.duration);
+  const presentation = await analyzeReport(
+    text,
+    cfg.prompt,
+    cfg.duration,
+    cfg.allowWebSearch
+  );
 
   updateJob(jobId, { status: "generating_tts", progress: 45, presentation });
 
@@ -179,4 +247,27 @@ async function processJob(
     compositionPath,
     outputPath,
   });
+}
+
+/**
+ * Builds a combined source string from multiple documents, allocating the
+ * character budget fairly so later files are not discarded.
+ */
+function buildBalancedSourceContext(
+  sources: { name: string; text: string }[],
+  maxChars: number
+): string {
+  if (sources.length === 0) return "";
+  if (sources.length === 1) {
+    const s = sources[0];
+    const trimmed = s.text.slice(0, maxChars);
+    return `=== SOURCE: ${s.name} ===\n${trimmed}`;
+  }
+
+  const perDoc = Math.floor(maxChars / sources.length);
+  const parts = sources.map((s) => {
+    const trimmed = s.text.slice(0, perDoc);
+    return `=== SOURCE: ${s.name} ===\n${trimmed}`;
+  });
+  return parts.join("\n\n");
 }

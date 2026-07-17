@@ -5,12 +5,14 @@ import {
   parseOpenRouterError,
   parseOpenRouterResponseError,
 } from "@/lib/openrouter/client";
+import { config } from "@/lib/config";
 import type { PresentationData } from "@/lib/types";
 
 export async function analyzeReport(
   sourceText: string,
   userPrompt: string,
-  durationSeconds: number
+  durationSeconds: number,
+  allowWebSearch: boolean = false
 ): Promise<PresentationData> {
   const wordsPerMinute = 125;
   const endingHoldSeconds = Math.min(4, Math.max(2, durationSeconds * 0.06));
@@ -24,13 +26,19 @@ export async function analyzeReport(
   );
   const sceneCount = Math.max(4, Math.min(10, Math.round(durationSeconds / 8)));
 
+  const webSearchGuidance = allowWebSearch
+    ? `\n- The uploaded documents are your PRIMARY evidence. You may search the web for supplementary context (market comparisons, industry benchmarks, recent events) but never let web results contradict or replace document data.
+- If a web source conflicts with the uploaded documents, explicitly note the discrepancy.
+- When you use information from the web, include the domain in your sourceAttribution (e.g. "Company Report + reuters.com, nasdaq.com").`
+    : "";
+
   const systemPrompt = `You are an expert presentation designer and data analyst. Your job is to transform source documents into compelling, visually rich video presentations.
 
 You MUST return valid JSON matching the schema below. No markdown, no explanation, just JSON.
 
 RULES:
 - Extract real numbers, percentages, and facts from the source. Never invent data.
-- Every claim should reference the source material.
+- Every claim should reference the source material.${webSearchGuidance}
 - Create ${sceneCount} scenes that tell a complete story arc: hook, context, key findings, deep dives, a concise recap, and conclusion.
 - The narration script should be approximately ${targetNarrationWords} words. It must finish naturally before the video ends; do not exceed this budget.
 - Include charts with real data from the source where appropriate. Use bars for comparisons, lines for trends, donuts for compositions.
@@ -84,24 +92,31 @@ JSON SCHEMA:
 }`;
 
   let raw: string;
+  let citationAnnotations: Array<{ type?: string; url?: string; title?: string }> = [];
   try {
+    const requestBody: Record<string, unknown> = {
+      model: OPENROUTER_CHAT_MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: `${userPrompt}\n\nSOURCE DOCUMENTS:\n\n${sourceText.slice(0, config.limits.maxCombinedChars)}`,
+        },
+      ],
+      response_format: { type: "json_object" },
+      plugins: [{ id: "response-healing" }],
+      temperature: 0.7,
+      max_tokens: 10_000,
+    };
+
+    if (allowWebSearch) {
+      requestBody.tools = [{ type: "openrouter:web_search" }];
+    }
+
     const response = await fetch(openRouterUrl("/chat/completions"), {
       method: "POST",
       headers: getOpenRouterHeaders(),
-      body: JSON.stringify({
-        model: OPENROUTER_CHAT_MODEL,
-        messages: [
-          { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: `${userPrompt}\n\nSOURCE DOCUMENT:\n\n${sourceText.slice(0, 30000)}`,
-          },
-        ],
-        response_format: { type: "json_object" },
-        plugins: [{ id: "response-healing" }],
-        temperature: 0.7,
-        max_tokens: 10_000,
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
@@ -109,9 +124,19 @@ JSON SCHEMA:
     }
 
     const completion = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string | null } }>;
+      choices?: Array<{
+        message?: {
+          content?: string | null;
+          annotations?: Array<{
+            type?: string;
+            url?: string;
+            title?: string;
+          }>;
+        };
+      }>;
     };
     raw = completion.choices?.[0]?.message?.content ?? "";
+    citationAnnotations = completion.choices?.[0]?.message?.annotations ?? [];
   } catch (err) {
     throw new Error(parseOpenRouterError(err));
   }
@@ -123,6 +148,26 @@ JSON SCHEMA:
   }
 
   const parsed = extractJson<PresentationData>(raw);
+
+  if (citationAnnotations.length > 0) {
+    const domains = new Set<string>();
+    for (const ann of citationAnnotations) {
+      if (ann.url) {
+        try {
+          domains.add(new URL(ann.url).hostname.replace(/^www\./, ""));
+        } catch {
+          // skip malformed URLs
+        }
+      }
+    }
+    if (domains.size > 0) {
+      const existing = parsed.sourceAttribution || "";
+      const domainList = Array.from(domains).slice(0, 5).join(", ");
+      parsed.sourceAttribution = existing
+        ? `${existing} + ${domainList}`
+        : domainList;
+    }
+  }
 
   validatePresentation(parsed, durationSeconds);
   return parsed;
