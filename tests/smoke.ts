@@ -15,6 +15,8 @@ import { selectScenesForImages } from "../src/lib/openrouter/images";
 import {
   jobToHistoryItem,
   sanitizeJobArtifacts,
+  isSafeJobId,
+  deleteJobArtifacts,
 } from "../src/lib/jobs/persist";
 import type { Job, PresentationData, Scene } from "../src/lib/types";
 import fs from "fs/promises";
@@ -454,10 +456,60 @@ assert(
   "history falls back to prompt when title missing"
 );
 
-// --- buildPptx ---
-console.log("\nbuildPptx:");
+console.log("\ndeleteJobArtifacts:");
+assert(
+  isSafeJobId("a1b2c3d4-e5f6-7890-abcd-ef1234567890"),
+  "accepts uuid job id"
+);
+assert(!isSafeJobId("../etc"), "rejects path traversal job id");
+assert(!isSafeJobId("smoke-pptx-test"), "rejects non-uuid job id");
 
 void (async () => {
+  try {
+    const delId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+    const dirs = [
+      path.join(config.dirs.uploads, delId),
+      path.join(config.dirs.renders, delId),
+      path.join(config.dirs.pptx, delId),
+      path.join(config.dirs.images, delId),
+      path.join(config.dirs.audio, delId),
+      path.join(config.dirs.compositions, delId),
+    ];
+    for (const dir of dirs) {
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "marker.txt"), "x");
+    }
+    await fs.mkdir(config.dirs.jobs, { recursive: true });
+    await fs.writeFile(
+      path.join(config.dirs.jobs, `${delId}.json`),
+      JSON.stringify({ id: delId }),
+      "utf-8"
+    );
+
+    await deleteJobArtifacts(delId);
+
+    for (const dir of dirs) {
+      try {
+        await fs.access(dir);
+        assert(false, `artifact dir removed: ${path.basename(path.dirname(dir))}/${delId}`);
+      } catch {
+        assert(true, `artifact dir removed: ${path.basename(dir)}`);
+      }
+    }
+    try {
+      await fs.access(path.join(config.dirs.jobs, `${delId}.json`));
+      assert(false, "job json removed");
+    } catch {
+      assert(true, "job json removed");
+    }
+  } catch (err) {
+    failed++;
+    console.error("  FAIL: deleteJobArtifacts threw", err);
+  }
+
+  // --- buildPptx ---
+  console.log("\nbuildPptx:");
+
   try {
     const pptxJobId = "smoke-pptx-test";
     const pptxPath = await buildPptx(mockPresentation, pptxJobId, {

@@ -159,12 +159,14 @@ async function processJob(
   files: File[],
   preloadedText: string
 ) {
-  const job = (await getJob(jobId))!;
+  const job = await getJob(jobId);
+  if (!job) return;
+
   const cfg = job.config;
   const wantsVideo = cfg.outputFormat === "video" || cfg.outputFormat === "both";
   const wantsPptx = cfg.outputFormat === "pptx" || cfg.outputFormat === "both";
 
-  updateJob(jobId, { status: "extracting", progress: 10 });
+  if (!updateJob(jobId, { status: "extracting", progress: 10 })) return;
 
   const sourceParts: { name: string; text: string }[] = [];
 
@@ -177,6 +179,7 @@ async function processJob(
     await fs.mkdir(uploadDir, { recursive: true });
 
     for (const file of files) {
+      if (!(await getJob(jobId))) return;
       const safeName = sanitizeFileName(file.name);
       const filePath = path.join(uploadDir, safeName);
       const buffer = Buffer.from(await file.arrayBuffer());
@@ -198,9 +201,11 @@ async function processJob(
     throw new Error("Could not extract text from any of the provided documents");
   }
 
+  if (!(await getJob(jobId))) return;
+
   const text = buildBalancedSourceContext(sourceParts, config.limits.maxCombinedChars);
 
-  updateJob(jobId, { status: "analyzing", progress: 25 });
+  if (!updateJob(jobId, { status: "analyzing", progress: 25 })) return;
   const presentation = await analyzeReport(
     text,
     cfg.prompt,
@@ -209,20 +214,23 @@ async function processJob(
     cfg.durationMode
   );
 
-  updateJob(jobId, { presentation, progress: 40 });
+  if (!updateJob(jobId, { presentation, progress: 40 })) return;
 
   let compositionPath: string | undefined;
   let outputPath: string | undefined;
   let pptxPath: string | undefined;
 
   if (wantsVideo) {
+    if (!(await getJob(jobId))) return;
     await buildVideoOutput(jobId, presentation, cfg);
-    const updated = (await getJob(jobId))!;
+    const updated = await getJob(jobId);
+    if (!updated) return;
     compositionPath = updated.compositionPath;
     outputPath = updated.outputPath;
   }
 
   if (wantsPptx) {
+    if (!(await getJob(jobId))) return;
     pptxPath = await buildPptxOutput(jobId, presentation, cfg.aspectRatio);
   }
 

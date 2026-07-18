@@ -1,6 +1,8 @@
 import fs from "fs";
 import type { Job } from "@/lib/types";
 import {
+  clearDeletedJobFlag,
+  deleteJobArtifacts,
   enqueueJobWrite,
   loadJobsFromDisk,
   sanitizeJobArtifacts,
@@ -48,18 +50,27 @@ export async function getJob(id: string): Promise<Job | undefined> {
 }
 
 export function setJob(job: Job): void {
+  clearDeletedJobFlag(job.id);
   const stored = { ...job };
   jobs.set(job.id, stored);
   persistAsync(stored);
 }
 
-export function updateJob(id: string, updates: Partial<Job>): Job {
+export function updateJob(id: string, updates: Partial<Job>): Job | null {
   const existing = jobs.get(id);
-  if (!existing) throw new Error(`Job ${id} not found`);
+  // Soft no-op when a job was deleted while still processing.
+  if (!existing) return null;
   const updated = { ...existing, ...updates };
   jobs.set(id, updated);
   persistAsync(updated);
   return updated;
+}
+
+export async function deleteJob(id: string): Promise<boolean> {
+  await ensureJobsHydrated();
+  const existed = jobs.delete(id);
+  await deleteJobArtifacts(id);
+  return existed;
 }
 
 export async function listJobs(): Promise<Job[]> {

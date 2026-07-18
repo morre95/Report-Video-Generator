@@ -398,6 +398,45 @@ export default function Home() {
     [loadPptxPreview, pollJob]
   );
 
+  const deleteHistoryJob = useCallback(
+    async (item: HistoryItem, e: React.MouseEvent) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const confirmed = window.confirm(
+        `Delete “${item.title}” from history?\n\nThis permanently removes the presentation metadata and generated files (video, PowerPoint, images, audio).`
+      );
+      if (!confirmed) return;
+
+      try {
+        const res = await fetch(`/api/jobs/${item.id}`, { method: "DELETE" });
+        if (!res.ok && res.status !== 404) {
+          const data = (await res.json().catch(() => null)) as {
+            error?: string;
+          } | null;
+          throw new Error(data?.error ?? "Failed to delete");
+        }
+
+        setHistory((prev) => prev.filter((h) => h.id !== item.id));
+
+        if (job.id === item.id) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setJob({ id: null, status: "idle", progress: 0, error: null });
+          setVideoUrl(null);
+          setVideoAspectRatio(null);
+          setPptxUrl(null);
+          setPptxPreview(null);
+        }
+      } catch (err) {
+        console.error("Failed to delete history job:", err);
+        window.alert(
+          err instanceof Error ? err.message : "Failed to delete presentation."
+        );
+      }
+    },
+    [job.id]
+  );
+
   useEffect(() => {
     const musicPreview = musicPreviewRef.current;
     return () => {
@@ -1130,10 +1169,8 @@ export default function Home() {
                         const active = job.id === item.id;
                         return (
                           <li key={item.id}>
-                            <button
-                              type="button"
-                              onClick={() => void openHistoryJob(item)}
-                              className="w-full text-left px-4 py-3 transition-colors"
+                            <div
+                              className="flex items-stretch gap-0"
                               style={{
                                 background: active
                                   ? "rgba(99, 102, 241, 0.08)"
@@ -1141,66 +1178,96 @@ export default function Home() {
                                 borderTop: "1px solid var(--border)",
                               }}
                             >
-                              <div className="flex items-start justify-between gap-2">
-                                <p
-                                  className="text-xs font-medium truncate"
-                                  style={{ color: "var(--text-primary)" }}
-                                >
-                                  {item.title}
-                                </p>
-                                <span
-                                  className="text-[10px] flex-shrink-0"
-                                  style={{ color: "var(--text-secondary)" }}
-                                >
-                                  {formatRelativeTime(item.createdAt)}
-                                </span>
-                              </div>
-                              <div className="flex flex-wrap gap-1.5 mt-1.5">
-                                {item.status === "error" ? (
-                                  <span
-                                    className="text-[10px] px-1.5 py-0.5 rounded"
-                                    style={{
-                                      background: "rgba(239, 68, 68, 0.12)",
-                                      color: "var(--error)",
-                                    }}
+                              <button
+                                type="button"
+                                onClick={() => void openHistoryJob(item)}
+                                className="flex-1 min-w-0 text-left px-4 py-3 transition-colors"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <p
+                                    className="text-xs font-medium truncate"
+                                    style={{ color: "var(--text-primary)" }}
                                   >
-                                    Error
-                                  </span>
-                                ) : item.status !== "complete" ? (
+                                    {item.title}
+                                  </p>
                                   <span
-                                    className="text-[10px] px-1.5 py-0.5 rounded"
-                                    style={{
-                                      background: "rgba(99, 102, 241, 0.12)",
-                                      color: "var(--accent)",
-                                    }}
+                                    className="text-[10px] flex-shrink-0"
+                                    style={{ color: "var(--text-secondary)" }}
                                   >
-                                    {STATUS_LABELS[item.status] ?? item.status}
+                                    {formatRelativeTime(item.createdAt)}
                                   </span>
-                                ) : null}
-                                {item.hasVideo && (
-                                  <span
-                                    className="text-[10px] px-1.5 py-0.5 rounded"
-                                    style={{
-                                      background: "var(--bg-tertiary)",
-                                      color: "var(--text-secondary)",
-                                    }}
-                                  >
-                                    Video
-                                  </span>
-                                )}
-                                {item.hasPptx && (
-                                  <span
-                                    className="text-[10px] px-1.5 py-0.5 rounded"
-                                    style={{
-                                      background: "var(--bg-tertiary)",
-                                      color: "var(--text-secondary)",
-                                    }}
-                                  >
-                                    PowerPoint
-                                  </span>
-                                )}
-                              </div>
-                            </button>
+                                </div>
+                                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                  {item.status === "error" ? (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.5 rounded"
+                                      style={{
+                                        background: "rgba(239, 68, 68, 0.12)",
+                                        color: "var(--error)",
+                                      }}
+                                    >
+                                      Error
+                                    </span>
+                                  ) : item.status !== "complete" ? (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.5 rounded"
+                                      style={{
+                                        background: "rgba(99, 102, 241, 0.12)",
+                                        color: "var(--accent)",
+                                      }}
+                                    >
+                                      {STATUS_LABELS[item.status] ?? item.status}
+                                    </span>
+                                  ) : null}
+                                  {item.hasVideo && (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.5 rounded"
+                                      style={{
+                                        background: "var(--bg-tertiary)",
+                                        color: "var(--text-secondary)",
+                                      }}
+                                    >
+                                      Video
+                                    </span>
+                                  )}
+                                  {item.hasPptx && (
+                                    <span
+                                      className="text-[10px] px-1.5 py-0.5 rounded"
+                                      style={{
+                                        background: "var(--bg-tertiary)",
+                                        color: "var(--text-secondary)",
+                                      }}
+                                    >
+                                      PowerPoint
+                                    </span>
+                                  )}
+                                </div>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => void deleteHistoryJob(item, e)}
+                                className="px-3 self-stretch text-[10px] font-medium transition-colors flex-shrink-0"
+                                style={{
+                                  color: "var(--text-secondary)",
+                                  borderLeft: "1px solid var(--border)",
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.color = "var(--error)";
+                                  e.currentTarget.style.background =
+                                    "rgba(239, 68, 68, 0.08)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.color =
+                                    "var(--text-secondary)";
+                                  e.currentTarget.style.background =
+                                    "transparent";
+                                }}
+                                aria-label={`Delete ${item.title}`}
+                                title="Delete presentation and files"
+                              >
+                                Delete
+                              </button>
+                            </div>
                           </li>
                         );
                       })}
