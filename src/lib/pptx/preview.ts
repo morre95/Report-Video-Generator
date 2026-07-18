@@ -1,12 +1,9 @@
 import fs from "fs/promises";
 import path from "path";
 import { config } from "@/lib/config";
+import { isSafeSceneId } from "@/lib/validation";
 
-const SAFE_SCENE_ID = /^[a-zA-Z0-9_-]+$/;
-
-export function isSafeSceneId(sceneId: string): boolean {
-  return SAFE_SCENE_ID.test(sceneId) && sceneId.length <= 128;
-}
+export { isSafeSceneId } from "@/lib/validation";
 
 export async function resolveJobImagePath(
   jobId: string,

@@ -9,6 +9,12 @@ import { config } from "@/lib/config";
 import type { Scene } from "@/lib/types";
 import fs from "fs/promises";
 import path from "path";
+import {
+  abortableDelay,
+  isAbortError,
+  throwIfAborted,
+  withTimeout,
+} from "@/lib/abort";
 
 /** Stay well under Gemini TTS ~4000-byte text field limit. */
 export const TTS_MAX_CHARS = 1800;
@@ -128,8 +134,10 @@ function silencePcm(seconds: number): Buffer {
 async function synthesizeChunk(
   text: string,
   voice: string,
+  signal?: AbortSignal,
   attempt = 1
 ): Promise<Buffer> {
+  throwIfAborted(signal);
   const ttsResponse = await fetch(openRouterUrl("/audio/speech"), {
     method: "POST",
     headers: getOpenRouterHeaders(),
@@ -139,6 +147,7 @@ async function synthesizeChunk(
       voice,
       response_format: "pcm",
     }),
+    signal: withTimeout(signal, 120_000),
   });
 
   if (!ttsResponse.ok) {
@@ -148,8 +157,8 @@ async function synthesizeChunk(
       attempt < MAX_TTS_ATTEMPTS &&
       (ttsResponse.status >= 500 || ttsResponse.status === 429)
     ) {
-      await new Promise((r) => setTimeout(r, 500 * attempt));
-      return synthesizeChunk(text, voice, attempt + 1);
+      await abortableDelay(500 * attempt, signal);
+      return synthesizeChunk(text, voice, signal, attempt + 1);
     }
     throw new Error(message);
   }
@@ -157,8 +166,8 @@ async function synthesizeChunk(
   const audioData = Buffer.from(await ttsResponse.arrayBuffer());
   if (audioData.length === 0) {
     if (attempt < MAX_TTS_ATTEMPTS) {
-      await new Promise((r) => setTimeout(r, 500 * attempt));
-      return synthesizeChunk(text, voice, attempt + 1);
+      await abortableDelay(500 * attempt, signal);
+      return synthesizeChunk(text, voice, signal, attempt + 1);
     }
     throw new Error(
       "OpenRouter TTS completed without returning an audio payload."
@@ -172,14 +181,15 @@ export async function generateVoiceover(
   narrationScript: string,
   jobId: string,
   voice: string = "Charon",
-  scenes?: Scene[]
+  scenes?: Scene[],
+  signal?: AbortSignal
 ): Promise<{ audioPath: string; durationSeconds: number; chunkCount: number }> {
   try {
     const chunks = splitNarrationForTts(narrationScript, scenes);
     const pcmParts: Buffer[] = [];
 
     for (let i = 0; i < chunks.length; i++) {
-      const pcm = await synthesizeChunk(chunks[i], voice);
+      const pcm = await synthesizeChunk(chunks[i], voice, signal);
       pcmParts.push(pcm);
       if (i < chunks.length - 1) {
         pcmParts.push(silencePcm(CHUNK_GAP_SECONDS));
@@ -187,6 +197,7 @@ export async function generateVoiceover(
     }
 
     const audioData = Buffer.concat(pcmParts);
+    throwIfAborted(signal);
     const audioDir = path.join(config.dirs.audio, jobId);
     await fs.mkdir(audioDir, { recursive: true });
     const audioPath = path.join(audioDir, "voiceover.wav");
@@ -202,6 +213,7 @@ export async function generateVoiceover(
       chunkCount: chunks.length,
     };
   } catch (err: unknown) {
+    if (isAbortError(err)) throw err;
     throw new Error(
       `Voiceover generation failed: ${parseOpenRouterError(err)}`
     );

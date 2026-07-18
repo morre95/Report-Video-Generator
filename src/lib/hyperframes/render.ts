@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
+import { isAbortError, throwIfAborted } from "@/lib/abort";
 
 const execFileAsync = promisify(execFile);
 const hyperframesCli = path.join(
@@ -16,6 +17,7 @@ interface RenderOptions {
   duration?: number;
   width?: number;
   height?: number;
+  signal?: AbortSignal;
 }
 
 interface ProbeResult {
@@ -35,13 +37,14 @@ interface ProbeResult {
 export async function renderComposition(
   opts: RenderOptions
 ): Promise<string> {
-  const { compositionPath, outputPath, fps = 30, duration } = opts;
+  const { compositionPath, outputPath, fps = 30, duration, signal } = opts;
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
   const failures: string[] = [];
 
   for (let attempt = 1; attempt <= 2; attempt++) {
+    throwIfAborted(signal);
     await fs.rm(outputPath, { force: true });
 
     try {
@@ -63,6 +66,7 @@ export async function renderComposition(
           cwd: process.cwd(),
           timeout: 600_000,
           maxBuffer: 50 * 1024 * 1024,
+          signal,
         }
       );
 
@@ -70,9 +74,10 @@ export async function renderComposition(
         console.error("Render stderr:", stderr);
       }
 
-      await validateRenderedVideo(outputPath, duration);
+      await validateRenderedVideo(outputPath, duration, signal);
       return outputPath;
     } catch (err: unknown) {
+      if (isAbortError(err)) throw err;
       const message = err instanceof Error ? err.message : String(err);
       failures.push(`attempt ${attempt}: ${message}`);
 
@@ -90,8 +95,10 @@ export async function renderComposition(
 
 export async function validateRenderedVideo(
   outputPath: string,
-  expectedDuration?: number
+  expectedDuration?: number,
+  signal?: AbortSignal
 ): Promise<void> {
+  throwIfAborted(signal);
   const stat = await fs.stat(outputPath);
   const minimumSize = 1_024;
 
@@ -117,6 +124,7 @@ export async function validateRenderedVideo(
     {
       timeout: 30_000,
       maxBuffer: 2 * 1024 * 1024,
+      signal,
     }
   );
 

@@ -7,10 +7,22 @@ import {
   loadJobsFromDisk,
   sanitizeJobArtifacts,
 } from "@/lib/jobs/persist";
+import { cancelTrackedJob } from "@/lib/jobs/control";
 
 const jobs = new Map<string, Job>();
 let hydrated = false;
 let hydratePromise: Promise<void> | null = null;
+
+const TERMINAL_STATUSES = new Set<Job["status"]>(["complete", "error"]);
+
+export function recoverInterruptedJob(job: Job): Job {
+  if (TERMINAL_STATUSES.has(job.status)) return job;
+  return {
+    ...job,
+    status: "error",
+    error: "Generation was interrupted by a server restart. Start a new job.",
+  };
+}
 
 function persistAsync(job: Job): void {
   void enqueueJobWrite(job).catch((err) => {
@@ -26,10 +38,10 @@ export async function ensureJobsHydrated(): Promise<void> {
     const diskJobs = await loadJobsFromDisk();
     for (const job of diskJobs) {
       if (!jobs.has(job.id)) {
-        jobs.set(
-          job.id,
-          sanitizeJobArtifacts(job, (p) => fs.existsSync(p))
-        );
+        const sanitized = sanitizeJobArtifacts(job, (p) => fs.existsSync(p));
+        const recovered = recoverInterruptedJob(sanitized);
+        jobs.set(job.id, recovered);
+        if (recovered !== sanitized) persistAsync(recovered);
       }
     }
     hydrated = true;
@@ -68,6 +80,7 @@ export function updateJob(id: string, updates: Partial<Job>): Job | null {
 
 export async function deleteJob(id: string): Promise<boolean> {
   await ensureJobsHydrated();
+  await cancelTrackedJob(id);
   const existed = jobs.delete(id);
   await deleteJobArtifacts(id);
   return existed;

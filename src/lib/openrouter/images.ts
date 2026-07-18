@@ -10,14 +10,21 @@ import {
   parseOpenRouterError,
   parseOpenRouterResponseError,
 } from "@/lib/openrouter/client";
+import { isSafeJobId } from "@/lib/jobs/persist";
+import { isSafeSceneId } from "@/lib/validation";
+import { isAbortError, throwIfAborted, withTimeout } from "@/lib/abort";
 
 export async function generateSlideImage(
   prompt: string,
   jobId: string,
   fileStem: string,
-  aspectRatio: AspectRatio = "16:9"
+  aspectRatio: AspectRatio = "16:9",
+  signal?: AbortSignal
 ): Promise<string | null> {
   try {
+    if (!isSafeJobId(jobId) || !isSafeSceneId(fileStem)) {
+      throw new Error("Unsafe image artifact path");
+    }
     const response = await fetch(openRouterUrl("/images"), {
       method: "POST",
       headers: getOpenRouterHeaders(),
@@ -28,6 +35,7 @@ export async function generateSlideImage(
         output_format: "png",
         n: 1,
       }),
+      signal: withTimeout(signal, 120_000),
     });
 
     if (!response.ok) {
@@ -47,11 +55,16 @@ export async function generateSlideImage(
     }
 
     const imageDir = path.join(config.dirs.images, jobId);
+    throwIfAborted(signal);
     await fs.mkdir(imageDir, { recursive: true });
-    const filePath = path.join(imageDir, `${fileStem}.png`);
+    const filePath = path.resolve(imageDir, `${fileStem}.png`);
+    if (!filePath.startsWith(`${path.resolve(imageDir)}${path.sep}`)) {
+      throw new Error("Unsafe image artifact path");
+    }
     await fs.writeFile(filePath, Buffer.from(b64, "base64"));
     return filePath;
   } catch (error) {
+    if (isAbortError(error)) throw error;
     console.warn("Slide image generation error:", parseOpenRouterError(error));
     return null;
   }
@@ -85,18 +98,21 @@ export function selectScenesForImages(
 export async function generatePresentationImages(
   presentation: PresentationData,
   jobId: string,
-  aspectRatio: AspectRatio
+  aspectRatio: AspectRatio,
+  signal?: AbortSignal
 ): Promise<Record<string, string>> {
   const scenes = selectScenesForImages(presentation);
   const images: Record<string, string> = {};
 
   for (const scene of scenes) {
+    throwIfAborted(signal);
     const prompt = buildImagePrompt(presentation, scene);
     const filePath = await generateSlideImage(
       prompt,
       jobId,
       scene.id,
-      aspectRatio === "9:16" || aspectRatio === "1:1" ? aspectRatio : "16:9"
+      aspectRatio === "9:16" || aspectRatio === "1:1" ? aspectRatio : "16:9",
+      signal
     );
     if (filePath) {
       images[scene.id] = filePath;

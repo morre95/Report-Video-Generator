@@ -27,10 +27,12 @@ export const config = {
     maxHistoryJobs: 50,
   },
   limits: {
+    maxRequestSize: 52 * 1024 * 1024, // 52 MB including multipart overhead
     maxFileSize: 20 * 1024 * 1024, // 20 MB
     maxFileCount: 10,
     maxTotalSize: 50 * 1024 * 1024, // 50 MB
     maxCombinedChars: 200_000,
+    maxPromptChars: 4_000,
     allowedTypes: [
       "application/pdf",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -50,3 +52,13 @@ export const ASPECT_DIMENSIONS: Record<AspectRatio, { w: number; h: number }> =
     "9:16": { w: 1080, h: 1920 },
     "1:1": { w: 1080, h: 1080 },
   };
+
+export const SUPPORTED_FPS = [24, 30, 60] as const;
+export const SUPPORTED_VOICES = [
+  "Charon",
+  "Kore",
+  "Puck",
+  "Zephyr",
+  "Aoede",
+  "Fenrir",
+] as const;

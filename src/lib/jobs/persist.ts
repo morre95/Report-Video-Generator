@@ -113,11 +113,12 @@ export function enqueueJobWrite(job: Job): Promise<void> {
     });
 
   writeChains.set(job.id, next);
-  void next.finally(() => {
+  const cleanup = () => {
     if (writeChains.get(job.id) === next) {
       writeChains.delete(job.id);
     }
-  });
+  };
+  void next.then(cleanup, cleanup);
 
   return next;
 }

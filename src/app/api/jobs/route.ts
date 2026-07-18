@@ -16,6 +16,22 @@ import { setJob, updateJob, getJob, listJobs } from "@/lib/jobs/store";
 import { jobToHistoryItem } from "@/lib/jobs/persist";
 import { resolveBackgroundMusic, prepareLoopedBackgroundMusic } from "@/lib/music";
 import type { Job, OutputFormat, PresentationData } from "@/lib/types";
+import {
+  parseAspectRatio,
+  parseBoolean,
+  parseContentLength,
+  parseDurationMode,
+  parseFps,
+  parseManualDuration,
+  parseOutputFormat,
+  parseVoice,
+  validatePrompt,
+  validateSourceText,
+  validateUploadedFile,
+  ValidationError,
+} from "@/lib/validation";
+import { isAbortError, throwIfAborted } from "@/lib/abort";
+import { startTrackedJob } from "@/lib/jobs/control";
 
 export async function GET() {
   const jobs = await listJobs();
@@ -28,62 +44,74 @@ function sanitizeFileName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 200);
 }
 
-function validateFileExtension(name: string): boolean {
-  const ext = path.extname(name).toLowerCase();
-  return (config.limits.allowedExtensions as readonly string[]).includes(ext);
-}
-
-function parseOutputFormat(value: FormDataEntryValue | null): OutputFormat {
-  if (value === "pptx" || value === "both" || value === "video") {
-    return value;
-  }
-  return config.defaults.outputFormat;
-}
-
 export async function POST(req: NextRequest) {
-  const formData = await req.formData();
-  const uploadedFiles = formData.getAll("files") as File[];
-  const prompt = (formData.get("prompt") as string) ?? "";
-  const durationMode =
-    formData.get("durationMode") === "manual" ? "manual" : "auto";
-  const requestedDuration = parseInt(
-    (formData.get("duration") as string) ?? String(config.defaults.duration),
-    10
-  );
-  const duration =
-    durationMode === "manual" ? requestedDuration : config.defaults.duration;
-  const outputFormat = parseOutputFormat(formData.get("outputFormat"));
-  const aspectRatio = ((formData.get("aspectRatio") as string) ?? "16:9") as AspectRatio;
-  const fps = parseInt((formData.get("fps") as string) ?? "30", 10);
-  const voice = (formData.get("voice") as string) ?? config.defaults.voice;
-  const backgroundMusic =
-    (formData.get("backgroundMusic") as string) ?? "";
-  const sourceText = (formData.get("sourceText") as string) ?? "";
-  const allowWebSearch =
-    (formData.get("allowWebSearch") as string) === "true";
+  const declaredLength = req.headers.get("content-length");
+  if (declaredLength === null) {
+    return NextResponse.json(
+      { error: "Content-Length header is required" },
+      { status: 411 }
+    );
+  }
 
-  if (uploadedFiles.length === 0 && !sourceText) {
+  let contentLength: number;
+  try {
+    contentLength = parseContentLength(declaredLength);
+  } catch (error) {
+    return validationResponse(error);
+  }
+  if (contentLength > config.limits.maxRequestSize) {
+    return NextResponse.json(
+      { error: `Request body exceeds ${config.limits.maxRequestSize / 1024 / 1024} MB` },
+      { status: 413 }
+    );
+  }
+
+  let formData: FormData;
+  try {
+    formData = await req.formData();
+  } catch {
+    return NextResponse.json({ error: "Invalid multipart form data" }, { status: 400 });
+  }
+
+  let uploadedFiles: File[];
+  let prompt: string;
+  let durationMode: Job["config"]["durationMode"];
+  let duration: number;
+  let outputFormat: OutputFormat;
+  let aspectRatio: AspectRatio;
+  let fps: number;
+  let voice: string;
+  let backgroundMusic: string;
+  let sourceText: string;
+  let allowWebSearch: boolean;
+
+  try {
+    uploadedFiles = formData.getAll("files").map(validateUploadedFile);
+    prompt = validatePrompt(formData.get("prompt"));
+    durationMode = parseDurationMode(formData.get("durationMode"));
+    duration = parseManualDuration(formData.get("duration"), durationMode);
+    outputFormat = parseOutputFormat(formData.get("outputFormat"));
+    aspectRatio = parseAspectRatio(formData.get("aspectRatio"));
+    fps = parseFps(formData.get("fps"));
+    voice = parseVoice(formData.get("voice"));
+    const musicEntry = formData.get("backgroundMusic");
+    if (musicEntry !== null && typeof musicEntry !== "string") {
+      throw new ValidationError("Background music is invalid");
+    }
+    backgroundMusic = musicEntry ?? "";
+    await resolveBackgroundMusic(backgroundMusic);
+    sourceText = validateSourceText(formData.get("sourceText"));
+    allowWebSearch = parseBoolean(
+      formData.get("allowWebSearch"),
+      "Allow web search"
+    );
+  } catch (error) {
+    return validationResponse(error);
+  }
+
+  if (uploadedFiles.length === 0 && !sourceText.trim()) {
     return NextResponse.json(
       { error: "No files or source text provided" },
-      { status: 400 }
-    );
-  }
-
-  if (!prompt) {
-    return NextResponse.json(
-      { error: "Prompt is required" },
-      { status: 400 }
-    );
-  }
-
-  if (
-    durationMode === "manual" &&
-    (!Number.isFinite(requestedDuration) ||
-      requestedDuration < 15 ||
-      requestedDuration > 300)
-  ) {
-    return NextResponse.json(
-      { error: "Manual duration must be between 15 and 300 seconds" },
       { status: 400 }
     );
   }
@@ -100,12 +128,6 @@ export async function POST(req: NextRequest) {
     if (f.size > config.limits.maxFileSize) {
       return NextResponse.json(
         { error: `File "${f.name}" exceeds the ${config.limits.maxFileSize / 1024 / 1024} MB limit` },
-        { status: 400 }
-      );
-    }
-    if (!validateFileExtension(f.name)) {
-      return NextResponse.json(
-        { error: `Unsupported file type: "${f.name}". Allowed: ${config.limits.allowedExtensions.join(", ")}` },
         { status: 400 }
       );
     }
@@ -143,7 +165,11 @@ export async function POST(req: NextRequest) {
   };
   setJob(job);
 
-  processJob(jobId, uploadedFiles, sourceText).catch((err) => {
+  const processPromise = startTrackedJob(jobId, (signal) =>
+    processJob(jobId, uploadedFiles, sourceText, signal)
+  );
+  void processPromise.catch((err) => {
+    if (isAbortError(err)) return;
     console.error(`Job ${jobId} failed:`, err);
     updateJob(jobId, {
       status: "error",
@@ -154,11 +180,21 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ jobId, status: "uploading" });
 }
 
+function validationResponse(error: unknown): NextResponse {
+  const message =
+    error instanceof ValidationError || error instanceof Error
+      ? error.message
+      : "Invalid request";
+  return NextResponse.json({ error: message }, { status: 400 });
+}
+
 async function processJob(
   jobId: string,
   files: File[],
-  preloadedText: string
+  preloadedText: string,
+  signal: AbortSignal
 ) {
+  throwIfAborted(signal);
   const job = await getJob(jobId);
   if (!job) return;
 
@@ -179,17 +215,22 @@ async function processJob(
     await fs.mkdir(uploadDir, { recursive: true });
 
     for (const file of files) {
+      throwIfAborted(signal);
       if (!(await getJob(jobId))) return;
       const safeName = sanitizeFileName(file.name);
       const filePath = path.join(uploadDir, safeName);
       const buffer = Buffer.from(await file.arrayBuffer());
+      throwIfAborted(signal);
       await fs.writeFile(filePath, buffer);
       try {
+        throwIfAborted(signal);
         const text = await extractText(filePath);
+        throwIfAborted(signal);
         if (text.trim()) {
           sourceParts.push({ name: file.name, text });
         }
       } catch (err) {
+        if (isAbortError(err)) throw err;
         throw new Error(
           `Failed to extract text from "${file.name}": ${err instanceof Error ? err.message : String(err)}`
         );
@@ -202,6 +243,7 @@ async function processJob(
   }
 
   if (!(await getJob(jobId))) return;
+  throwIfAborted(signal);
 
   const text = buildBalancedSourceContext(sourceParts, config.limits.maxCombinedChars);
 
@@ -211,7 +253,8 @@ async function processJob(
     cfg.prompt,
     cfg.duration,
     cfg.allowWebSearch,
-    cfg.durationMode
+    cfg.durationMode,
+    signal
   );
 
   if (!updateJob(jobId, { presentation, progress: 40 })) return;
@@ -221,8 +264,9 @@ async function processJob(
   let pptxPath: string | undefined;
 
   if (wantsVideo) {
+    throwIfAborted(signal);
     if (!(await getJob(jobId))) return;
-    await buildVideoOutput(jobId, presentation, cfg);
+    await buildVideoOutput(jobId, presentation, cfg, signal);
     const updated = await getJob(jobId);
     if (!updated) return;
     compositionPath = updated.compositionPath;
@@ -230,10 +274,17 @@ async function processJob(
   }
 
   if (wantsPptx) {
+    throwIfAborted(signal);
     if (!(await getJob(jobId))) return;
-    pptxPath = await buildPptxOutput(jobId, presentation, cfg.aspectRatio);
+    pptxPath = await buildPptxOutput(
+      jobId,
+      presentation,
+      cfg.aspectRatio,
+      signal
+    );
   }
 
+  throwIfAborted(signal);
   updateJob(jobId, {
     status: "complete",
     progress: 100,
@@ -247,8 +298,10 @@ async function processJob(
 async function buildVideoOutput(
   jobId: string,
   presentation: PresentationData,
-  cfg: Job["config"]
+  cfg: Job["config"],
+  signal: AbortSignal
 ) {
+  throwIfAborted(signal);
   updateJob(jobId, { status: "generating_tts", progress: 45 });
 
   const { audioPath, durationSeconds: voiceoverDuration } =
@@ -256,7 +309,8 @@ async function buildVideoOutput(
       presentation.narrationScript,
       jobId,
       cfg.voice,
-      presentation.scenes
+      presentation.scenes,
+      signal
     );
 
   // Keep the requested length when speech covers most of it; otherwise
@@ -279,6 +333,7 @@ async function buildVideoOutput(
   presentation.totalDuration = outputDuration;
 
   updateJob(jobId, { status: "composing", progress: 60, presentation });
+  throwIfAborted(signal);
 
   const compDir = path.join(config.dirs.compositions, jobId);
   await fs.mkdir(compDir, { recursive: true });
@@ -297,7 +352,8 @@ async function buildVideoOutput(
     await prepareLoopedBackgroundMusic(
       configuredMusicPath,
       compositionMusicPath,
-      outputDuration
+      outputDuration,
+      signal
     );
     compositionMusicSrc = "assets/background-music.mp3";
   }
@@ -310,6 +366,7 @@ async function buildVideoOutput(
     musicPath: compositionMusicSrc,
     musicVolume: config.defaults.musicVolume,
   });
+  throwIfAborted(signal);
 
   const compositionPath = path.join(compDir, "index.html");
   await fs.writeFile(compositionPath, html, "utf-8");
@@ -325,28 +382,35 @@ async function buildVideoOutput(
     outputPath,
     fps: cfg.fps,
     duration: outputDuration,
+    signal,
   });
 
+  throwIfAborted(signal);
   updateJob(jobId, { outputPath, compositionPath, presentation });
 }
 
 async function buildPptxOutput(
   jobId: string,
   presentation: PresentationData,
-  aspectRatio: AspectRatio
+  aspectRatio: AspectRatio,
+  signal: AbortSignal
 ): Promise<string> {
+  throwIfAborted(signal);
   updateJob(jobId, { status: "generating_images", progress: 82 });
   const images = await generatePresentationImages(
     presentation,
     jobId,
-    aspectRatio
+    aspectRatio,
+    signal
   );
 
+  throwIfAborted(signal);
   updateJob(jobId, { status: "building_pptx", progress: 92 });
   const pptxPath = await buildPptx(presentation, jobId, {
     aspectRatio,
     images,
   });
+  throwIfAborted(signal);
   updateJob(jobId, { pptxPath });
   return pptxPath;
 }

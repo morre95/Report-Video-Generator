@@ -1,6 +1,7 @@
 import type { PresentationData, Scene, ChartData } from "@/lib/types";
 import type { AspectRatio } from "@/lib/config";
 import { ASPECT_DIMENSIONS } from "@/lib/config";
+import { validatePresentationData, ValidationError } from "@/lib/validation";
 
 interface CompositionConfig {
   duration: number;
@@ -15,7 +16,18 @@ export function buildCompositionHtml(
   data: PresentationData,
   cfg: CompositionConfig
 ): string {
+  try {
+    data = validatePresentationData(data);
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      throw new Error(`Unsafe composition data: ${error.message}`);
+    }
+    throw error;
+  }
   const dims = ASPECT_DIMENSIONS[cfg.aspectRatio];
+  if (!dims || !Number.isFinite(cfg.duration) || !Number.isFinite(cfg.fps)) {
+    throw new Error("Invalid composition configuration");
+  }
   const { primary, secondary, accent, background, text } = data.colorPalette;
 
   const scenesHtml = data.scenes
@@ -802,7 +814,7 @@ function renderScene(
       break;
   }
 
-  return `    <div id="${escHtml(scene.id)}" class="scene ${scene.type}-scene clip" data-start="${scene.startTime}" data-duration="${scene.duration}" data-track-index="0">
+  return `    <div id="${escAttr(scene.id)}" class="scene ${escAttr(scene.type)}-scene clip" data-start="${scene.startTime}" data-duration="${scene.duration}" data-track-index="0">
       <div class="scene-chrome"></div>
       <div class="scene-counter">${sceneNumber} / ${totalNumber}</div>
       <div class="scene-ghost-number">${sceneNumber}</div>
@@ -1088,4 +1100,8 @@ function escHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function escAttr(s: string): string {
+  return escHtml(s).replace(/'/g, "&#39;");
 }

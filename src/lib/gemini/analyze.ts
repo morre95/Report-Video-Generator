@@ -13,13 +13,16 @@ import {
   type DurationMode,
 } from "@/lib/duration";
 import type { PresentationData } from "@/lib/types";
+import { validatePresentationData, ValidationError } from "@/lib/validation";
+import { isAbortError, withTimeout } from "@/lib/abort";
 
 export async function analyzeReport(
   sourceText: string,
   userPrompt: string,
   durationSeconds: number,
   allowWebSearch: boolean = false,
-  durationMode: DurationMode = "manual"
+  durationMode: DurationMode = "manual",
+  signal?: AbortSignal
 ): Promise<PresentationData> {
   const wordsPerMinute = 125;
   const endingHoldSeconds = Math.min(4, Math.max(2, durationSeconds * 0.06));
@@ -148,6 +151,7 @@ JSON SCHEMA:
       method: "POST",
       headers: getOpenRouterHeaders(),
       body: JSON.stringify(requestBody),
+      signal: withTimeout(signal, 180_000),
     });
 
     if (!response.ok) {
@@ -171,6 +175,7 @@ JSON SCHEMA:
     finishReason = completion.choices?.[0]?.finish_reason ?? undefined;
     citationAnnotations = completion.choices?.[0]?.message?.annotations ?? [];
   } catch (err) {
+    if (isAbortError(err)) throw err;
     throw new Error(parseOpenRouterError(err));
   }
 
@@ -182,12 +187,15 @@ JSON SCHEMA:
 
   let parsed: PresentationData;
   try {
-    parsed = extractJson<PresentationData>(raw);
+    parsed = validatePresentationData(extractJson<unknown>(raw));
   } catch (err) {
     if (finishReason === "length" || finishReason === "max_tokens") {
       throw new Error(
         "The presentation JSON was truncated because the response ran out of tokens. Try a shorter duration or retry."
       );
+    }
+    if (err instanceof ValidationError) {
+      throw new Error(`Invalid AI presentation: ${err.message}`);
     }
     throw err;
   }
@@ -267,9 +275,6 @@ function extractJson<T>(raw: string): T {
 }
 
 function validatePresentation(data: PresentationData, expectedDuration: number) {
-  if (!data.title) throw new Error("Missing presentation title");
-  if (!data.scenes || data.scenes.length < 2)
-    throw new Error("Need at least 2 scenes");
   ensureNarrationScript(data);
 
   const totalSceneDuration = data.scenes.reduce(
@@ -277,19 +282,16 @@ function validatePresentation(data: PresentationData, expectedDuration: number) 
     0
   );
 
-  if (Math.abs(totalSceneDuration - expectedDuration) > 2) {
-    const scale = expectedDuration / totalSceneDuration;
-    let accumulated = 0;
-    data.scenes.forEach((scene) => {
-      scene.duration = Math.round(scene.duration * scale);
-      scene.startTime = accumulated;
-      accumulated += scene.duration;
-    });
-    const drift = expectedDuration - accumulated;
-    if (drift !== 0) {
-      data.scenes[data.scenes.length - 1].duration += drift;
-    }
-  }
+  const scale = expectedDuration / totalSceneDuration;
+  let accumulated = 0;
+  data.scenes.forEach((scene, index) => {
+    scene.duration =
+      index === data.scenes.length - 1
+        ? expectedDuration - accumulated
+        : Math.round(scene.duration * scale * 10) / 10;
+    scene.startTime = Math.round(accumulated * 10) / 10;
+    accumulated += scene.duration;
+  });
 
   data.totalDuration = expectedDuration;
 }

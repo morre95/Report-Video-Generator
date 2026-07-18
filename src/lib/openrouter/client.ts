@@ -1,4 +1,5 @@
 import { config } from "@/lib/config";
+import { withTimeout } from "@/lib/abort";
 
 export const OPENROUTER_CHAT_MODEL = "google/gemini-3.5-flash";
 export const OPENROUTER_TTS_MODEL =
@@ -69,7 +70,7 @@ export function parseOpenRouterError(error: unknown): string {
   return raw || "Unknown OpenRouter error";
 }
 
-export async function checkApiKey(): Promise<{
+export async function checkApiKey(signal?: AbortSignal): Promise<{
   ok: boolean;
   error?: string;
 }> {
@@ -84,6 +85,7 @@ export async function checkApiKey(): Promise<{
     const response = await fetch(openRouterUrl("/key"), {
       headers: getOpenRouterHeaders(),
       cache: "no-store",
+      signal: withTimeout(signal, 15_000),
     });
 
     if (!response.ok) {

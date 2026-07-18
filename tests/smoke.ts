@@ -17,18 +17,42 @@ import {
   listJobImageSceneIds,
   resolveJobImagePath,
 } from "../src/lib/pptx/preview";
-import { selectScenesForImages } from "../src/lib/openrouter/images";
+import {
+  generateSlideImage,
+  selectScenesForImages,
+} from "../src/lib/openrouter/images";
 import {
   jobToHistoryItem,
   sanitizeJobArtifacts,
   isSafeJobId,
   deleteJobArtifacts,
+  enqueueJobWrite,
+  jobFilePath,
 } from "../src/lib/jobs/persist";
 import { musicLoopIterations } from "../src/lib/music";
 import type { Job, PresentationData, Scene } from "../src/lib/types";
 import fs from "fs/promises";
 import path from "path";
 import { config } from "../src/lib/config";
+import {
+  parseAspectRatio,
+  parseBoolean,
+  parseContentLength,
+  parseDurationMode,
+  parseFps,
+  parseManualDuration,
+  parseOutputFormat,
+  parseVoice,
+  validatePresentationData,
+  validatePrompt,
+  validateSourceText,
+} from "../src/lib/validation";
+import {
+  cancelTrackedJob,
+  isJobActive,
+  startTrackedJob,
+} from "../src/lib/jobs/control";
+import { recoverInterruptedJob } from "../src/lib/jobs/store";
 
 let passed = 0;
 let failed = 0;
@@ -218,6 +242,94 @@ assert(
   html.includes('id="background-music" class="clip"'),
   "background music is a discoverable Hyperframes clip"
 );
+
+console.log("\npresentation validation and composition safety:");
+{
+  const wrongStarts = {
+    ...mockPresentation,
+    scenes: mockPresentation.scenes.map((scene) => ({
+      ...scene,
+      startTime: 999,
+    })),
+  };
+  const validated = validatePresentationData(wrongStarts);
+  assert(validated.scenes[0].startTime === 0, "rebuilds first scene start time");
+  assert(
+    validated.scenes[1].startTime === validated.scenes[0].duration,
+    "rebuilds sequential scene timing"
+  );
+
+  let unsafeColorRejected = false;
+  try {
+    buildCompositionHtml(
+      {
+        ...mockPresentation,
+        colorPalette: {
+          ...mockPresentation.colorPalette,
+          primary: "red;}</style><script>alert(1)</script><style>",
+        },
+      },
+      { duration: 30, fps: 30, aspectRatio: "16:9" }
+    );
+  } catch {
+    unsafeColorRejected = true;
+  }
+  assert(unsafeColorRejected, "rejects CSS/script injection in palette values");
+
+  let unsafeIdRejected = false;
+  try {
+    validatePresentationData({
+      ...mockPresentation,
+      scenes: [
+        { ...mockPresentation.scenes[0], id: "../escape" },
+        mockPresentation.scenes[1],
+      ],
+    });
+  } catch {
+    unsafeIdRejected = true;
+  }
+  assert(unsafeIdRejected, "rejects unsafe scene ids");
+
+  let duplicateIdRejected = false;
+  try {
+    validatePresentationData({
+      ...mockPresentation,
+      scenes: mockPresentation.scenes.map((scene) => ({ ...scene, id: "same" })),
+    });
+  } catch {
+    duplicateIdRejected = true;
+  }
+  assert(duplicateIdRejected, "rejects duplicate scene ids");
+}
+
+console.log("\nrequest validation:");
+assert(parseContentLength("1024") === 1024, "accepts valid content length");
+assert(parseAspectRatio("9:16") === "9:16", "accepts configured aspect ratio");
+assert(parseFps("60") === 60, "accepts configured FPS");
+assert(parseVoice("Charon") === "Charon", "accepts configured voice");
+assert(parseOutputFormat("both") === "both", "accepts output format");
+assert(parseDurationMode("manual") === "manual", "accepts duration mode");
+assert(parseManualDuration("300", "manual") === 300, "accepts max duration");
+assert(parseBoolean("false", "test") === false, "parses strict boolean");
+assert(validatePrompt("  concise brief  ") === "concise brief", "trims prompt");
+assert(validateSourceText("source") === "source", "accepts bounded source text");
+
+for (const [label, action] of [
+  ["rejects missing content length", () => parseContentLength(null)],
+  ["rejects unsupported aspect ratio", () => parseAspectRatio("3:2")],
+  ["rejects unsupported FPS", () => parseFps("120")],
+  ["rejects unsupported voice", () => parseVoice("Unknown")],
+  ["rejects oversized prompt", () => validatePrompt("x".repeat(4_001))],
+  ["rejects oversized source text", () => validateSourceText("x".repeat(200_001))],
+] as const) {
+  let threw = false;
+  try {
+    action();
+  } catch {
+    threw = true;
+  }
+  assert(threw, label);
+}
 assert(
   !html.includes('<html lang="en" data-duration'),
   "timing metadata is only on the composition root"
@@ -464,6 +576,22 @@ assert(
   "history falls back to prompt when title missing"
 );
 
+console.log("\ninterrupted job recovery:");
+const recovered = recoverInterruptedJob({
+  ...historyJob,
+  status: "rendering",
+  progress: 75,
+});
+assert(recovered.status === "error", "processing job becomes an error after restart");
+assert(
+  recovered.error?.includes("server restart") === true,
+  "recovered job explains the interruption"
+);
+assert(
+  recoverInterruptedJob(historyJob) === historyJob,
+  "terminal job is unchanged during recovery"
+);
+
 console.log("\nensureNarrationScript:");
 {
   const withScript = {
@@ -602,6 +730,62 @@ assert(!isSafeJobId("../etc"), "rejects path traversal job id");
 assert(!isSafeJobId("smoke-pptx-test"), "rejects non-uuid job id");
 
 void (async () => {
+  console.log("\ntracked job cancellation:");
+  try {
+    const trackedId = "cancel-test";
+    let abortObserved = false;
+    const trackedPromise = startTrackedJob(trackedId, async (signal) => {
+      try {
+        await new Promise<void>((_resolve, reject) => {
+          if (signal.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        });
+      } finally {
+        abortObserved = true;
+      }
+    });
+    await Promise.resolve();
+    assert(isJobActive(trackedId), "tracks active job");
+    assert(await cancelTrackedJob(trackedId), "cancel reports active job");
+    await trackedPromise.catch(() => undefined);
+    assert(abortObserved, "tracked work observes cancellation");
+    assert(!isJobActive(trackedId), "removes canceled job from registry");
+  } catch (err) {
+    failed++;
+    console.error("  FAIL: tracked cancellation threw", err);
+  }
+
+  console.log("\nimage artifact path safety:");
+  const unsafeImage = await generateSlideImage(
+    "unused",
+    "b1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "../../../public/escape"
+  );
+  assert(unsafeImage === null, "rejects traversal before image generation");
+
+  console.log("\njob write rejection handling:");
+  const failingId = "c1b2c3d4-e5f6-7890-abcd-ef1234567890";
+  const failingTarget = jobFilePath(failingId);
+  let unhandled = false;
+  const onUnhandled = () => {
+    unhandled = true;
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    await fs.mkdir(failingTarget, { recursive: true });
+    await enqueueJobWrite({ ...historyJob, id: failingId }).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert(!unhandled, "failed metadata write does not create unhandled rejection");
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    await fs.rm(failingTarget, { recursive: true, force: true });
+  }
+
   try {
     const delId = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
     const dirs = [

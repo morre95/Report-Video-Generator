@@ -3,6 +3,7 @@ import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
 import { config } from "@/lib/config";
+import { throwIfAborted } from "@/lib/abort";
 
 const execFileAsync = promisify(execFile);
 
@@ -45,7 +46,8 @@ export async function resolveBackgroundMusic(
 }
 
 export async function probeAudioDurationSeconds(
-  filePath: string
+  filePath: string,
+  signal?: AbortSignal
 ): Promise<number> {
   const { stdout } = await execFileAsync(
     "ffprobe",
@@ -58,7 +60,7 @@ export async function probeAudioDurationSeconds(
       "default=noprint_wrappers=1:nokey=1",
       filePath,
     ],
-    { timeout: 30_000 }
+    { timeout: 30_000, signal }
   );
   const duration = Number.parseFloat(stdout.trim());
   if (!Number.isFinite(duration) || duration <= 0) {
@@ -96,7 +98,8 @@ export function musicLoopIterations(
 export async function prepareLoopedBackgroundMusic(
   sourcePath: string,
   outputPath: string,
-  targetDurationSeconds: number
+  targetDurationSeconds: number,
+  signal?: AbortSignal
 ): Promise<void> {
   if (targetDurationSeconds <= 0) {
     throw new Error("Target music duration must be positive");
@@ -104,7 +107,8 @@ export async function prepareLoopedBackgroundMusic(
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
 
-  const sourceDuration = await probeAudioDurationSeconds(sourcePath);
+  throwIfAborted(signal);
+  const sourceDuration = await probeAudioDurationSeconds(sourcePath, signal);
   const loops = musicLoopIterations(sourceDuration, targetDurationSeconds);
 
   const args = ["-y", "-hide_banner", "-loglevel", "error"];
@@ -123,5 +127,5 @@ export async function prepareLoopedBackgroundMusic(
     outputPath
   );
 
-  await execFileAsync("ffmpeg", args, { timeout: 120_000 });
+  await execFileAsync("ffmpeg", args, { timeout: 120_000, signal });
 }
