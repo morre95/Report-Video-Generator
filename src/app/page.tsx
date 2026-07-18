@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import PptxPreview from "@/components/PptxPreview";
 
 type AspectRatio = "16:9" | "4:3" | "9:16" | "1:1";
 type DurationMode = "auto" | "manual";
@@ -26,6 +27,42 @@ interface JobState {
   durationSeconds?: number;
   hasVideo?: boolean;
   hasPptx?: boolean;
+}
+
+interface PptxPreviewState {
+  jobId: string;
+  presentation: {
+    title: string;
+    subtitle?: string;
+    sourceAttribution: string;
+    scenes: Array<{
+      id: string;
+      type: "title" | "kpi" | "chart" | "bullets" | "comparison" | "closing";
+      content: {
+        headline: string;
+        subtext?: string;
+        bullets?: string[];
+        chart?: {
+          type: string;
+          title?: string;
+          data: Array<{ label: string; value: number; color?: string }>;
+        };
+        kpiValue?: string;
+        kpiLabel?: string;
+        kpiChange?: string;
+      };
+      narration: string;
+    }>;
+    colorPalette: {
+      primary: string;
+      secondary: string;
+      accent: string;
+      background: string;
+      text: string;
+    };
+  };
+  imageSceneIds: string[];
+  aspectRatio: AspectRatio;
 }
 
 interface HistoryItem {
@@ -97,6 +134,7 @@ export default function Home() {
   });
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [pptxUrl, setPptxUrl] = useState<string | null>(null);
+  const [pptxPreview, setPptxPreview] = useState<PptxPreviewState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -229,6 +267,37 @@ export default function Home() {
     }
   }, []);
 
+  const loadPptxPreview = useCallback(async (jobId: string, hasPptx: boolean) => {
+    if (!hasPptx) {
+      setPptxPreview(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/preview`);
+      if (!res.ok) {
+        setPptxPreview(null);
+        return;
+      }
+      const data = (await res.json()) as {
+        presentation?: PptxPreviewState["presentation"];
+        imageSceneIds?: string[];
+        aspectRatio?: AspectRatio;
+      };
+      if (!data.presentation) {
+        setPptxPreview(null);
+        return;
+      }
+      setPptxPreview({
+        jobId,
+        presentation: data.presentation,
+        imageSceneIds: data.imageSceneIds ?? [],
+        aspectRatio: data.aspectRatio ?? "16:9",
+      });
+    } catch {
+      setPptxPreview(null);
+    }
+  }, []);
+
   const pollJob = useCallback(
     (jobId: string) => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -250,9 +319,11 @@ export default function Home() {
             if (pollRef.current) clearInterval(pollRef.current);
             setVideoUrl(data.outputPath ? `/api/jobs/${jobId}/render` : null);
             setPptxUrl(data.pptxPath ? `/api/jobs/${jobId}/pptx` : null);
+            void loadPptxPreview(jobId, !!data.pptxPath);
             void refreshHistory();
           } else if (data.status === "error") {
             if (pollRef.current) clearInterval(pollRef.current);
+            setPptxPreview(null);
             void refreshHistory();
           }
         } catch {
@@ -260,7 +331,7 @@ export default function Home() {
         }
       }, 1500);
     },
-    [refreshHistory]
+    [loadPptxPreview, refreshHistory]
   );
 
   const openHistoryJob = useCallback(
@@ -268,6 +339,9 @@ export default function Home() {
       const isTerminal = item.status === "complete" || item.status === "error";
 
       if (!isTerminal) {
+        setPptxPreview(null);
+        setVideoUrl(null);
+        setPptxUrl(null);
         pollJob(item.id);
         setJob({
           id: item.id,
@@ -300,16 +374,14 @@ export default function Home() {
             ? `/api/jobs/${item.id}/render`
             : null
         );
-        setPptxUrl(
-          data.status === "complete" && data.pptxPath
-            ? `/api/jobs/${item.id}/pptx`
-            : null
-        );
+        const hasPptx = data.status === "complete" && !!data.pptxPath;
+        setPptxUrl(hasPptx ? `/api/jobs/${item.id}/pptx` : null);
+        void loadPptxPreview(item.id, hasPptx);
       } catch {
         // ignore
       }
     },
-    [pollJob]
+    [loadPptxPreview, pollJob]
   );
 
   useEffect(() => {
@@ -344,6 +416,7 @@ export default function Home() {
     setJob({ id: null, status: "uploading", progress: 5, error: null });
     setVideoUrl(null);
     setPptxUrl(null);
+    setPptxPreview(null);
 
     const formData = new FormData();
     for (const f of files) {
@@ -1133,7 +1206,7 @@ export default function Home() {
                   className="text-lg font-semibold"
                   style={{ color: "var(--text-primary)" }}
                 >
-                  {videoUrl ? "Preview" : "Downloads ready"}
+                  Preview
                 </h2>
                 <div className="flex items-center gap-2">
                   {videoUrl && (
@@ -1169,28 +1242,56 @@ export default function Home() {
               </div>
 
               {videoUrl && (
-                <div
-                  className="rounded-2xl overflow-hidden shadow-2xl"
-                  style={{
-                    border: "1px solid var(--border)",
-                    background: "#000",
-                    aspectRatio: aspectRatio.replace(":", "/"),
-                  }}
-                >
-                  <video
-                    key={videoUrl}
-                    src={videoUrl}
-                    controls
-                    playsInline
-                    className="w-full h-full"
-                    style={{ display: "block", background: "#000" }}
+                <div className="space-y-2">
+                  {pptxPreview ? (
+                    <p
+                      className="text-xs font-medium uppercase tracking-wide"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      Video
+                    </p>
+                  ) : null}
+                  <div
+                    className="rounded-2xl overflow-hidden shadow-2xl"
+                    style={{
+                      border: "1px solid var(--border)",
+                      background: "#000",
+                      aspectRatio: aspectRatio.replace(":", "/"),
+                    }}
                   >
-                    Your browser does not support video playback.
-                  </video>
+                    <video
+                      key={videoUrl}
+                      src={videoUrl}
+                      controls
+                      playsInline
+                      className="w-full h-full"
+                      style={{ display: "block", background: "#000" }}
+                    >
+                      Your browser does not support video playback.
+                    </video>
+                  </div>
                 </div>
               )}
 
-              {!videoUrl && pptxUrl && (
+              {pptxPreview ? (
+                <div className="space-y-2">
+                  {videoUrl ? (
+                    <p
+                      className="text-xs font-medium uppercase tracking-wide"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      PowerPoint
+                    </p>
+                  ) : null}
+                  <PptxPreview
+                    key={pptxPreview.jobId}
+                    jobId={pptxPreview.jobId}
+                    presentation={pptxPreview.presentation}
+                    imageSceneIds={pptxPreview.imageSceneIds}
+                    aspectRatio={pptxPreview.aspectRatio}
+                  />
+                </div>
+              ) : pptxUrl && !videoUrl ? (
                 <div
                   className="rounded-2xl p-10 text-center"
                   style={{
@@ -1208,10 +1309,11 @@ export default function Home() {
                     className="text-sm"
                     style={{ color: "var(--text-secondary)" }}
                   >
-                    Your deck includes charts, shapes, and AI-generated visuals.
+                    Preview is loading, or download the deck to open it in
+                    PowerPoint or Google Slides.
                   </p>
                 </div>
-              )}
+              ) : null}
 
               <p
                 className="text-xs text-center"
@@ -1221,10 +1323,10 @@ export default function Home() {
                   ? `Auto selected ${Math.round(job.durationSeconds)} seconds.`
                   : null}{" "}
                 {videoUrl && pptxUrl
-                  ? "Play the video or download either file."
+                  ? "Play the video, browse the slides, or download either file."
                   : videoUrl
                     ? "Play the finished video here, or download the MP4."
-                    : "Download the PowerPoint to open it in PowerPoint or Google Slides."}
+                    : "Browse the slides here, or download the PowerPoint to open it in PowerPoint or Google Slides."}
               </p>
             </div>
           ) : isProcessing ? (

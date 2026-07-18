@@ -1,10 +1,9 @@
 import fs from "fs";
 import type { Job } from "@/lib/types";
 import {
+  enqueueJobWrite,
   loadJobsFromDisk,
-  pruneJobFiles,
   sanitizeJobArtifacts,
-  writeJobFile,
 } from "@/lib/jobs/persist";
 
 const jobs = new Map<string, Job>();
@@ -12,11 +11,9 @@ let hydrated = false;
 let hydratePromise: Promise<void> | null = null;
 
 function persistAsync(job: Job): void {
-  void writeJobFile(job)
-    .then(() => pruneJobFiles())
-    .catch((err) => {
-      console.error(`Failed to persist job ${job.id}:`, err);
-    });
+  void enqueueJobWrite(job).catch((err) => {
+    console.error(`Failed to persist job ${job.id}:`, err);
+  });
 }
 
 export async function ensureJobsHydrated(): Promise<void> {

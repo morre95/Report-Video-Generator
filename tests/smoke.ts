@@ -6,6 +6,11 @@ import {
 } from "../src/lib/duration";
 import { buildCompositionHtml } from "../src/lib/hyperframes/build-composition";
 import { mapChartType, buildPptx } from "../src/lib/pptx/build-pptx";
+import {
+  isSafeSceneId,
+  listJobImageSceneIds,
+  resolveJobImagePath,
+} from "../src/lib/pptx/preview";
 import { selectScenesForImages } from "../src/lib/openrouter/images";
 import {
   jobToHistoryItem,
@@ -473,6 +478,46 @@ void (async () => {
   } catch (err) {
     failed++;
     console.error("  FAIL: buildPptx threw", err);
+  }
+
+  // --- pptx preview image helpers ---
+  console.log("\npptx preview helpers:");
+  assert(isSafeSceneId("scene-1"), "accepts hyphenated scene id");
+  assert(isSafeSceneId("abc_123"), "accepts underscore scene id");
+  assert(!isSafeSceneId("../etc"), "rejects path traversal");
+  assert(!isSafeSceneId("a/b"), "rejects slash in scene id");
+
+  try {
+    const previewJobId = "smoke-preview-imgs";
+    const imageDir = path.join(config.dirs.images, previewJobId);
+    await fs.mkdir(imageDir, { recursive: true });
+    await fs.writeFile(path.join(imageDir, "title.png"), Buffer.from([1, 2, 3]));
+    await fs.writeFile(path.join(imageDir, "closing.png"), Buffer.from([4, 5, 6]));
+    await fs.writeFile(path.join(imageDir, "notes.txt"), "ignore");
+
+    const ids = await listJobImageSceneIds(previewJobId);
+    assert(
+      ids.length === 2 && ids.includes("title") && ids.includes("closing"),
+      `lists png scene ids (got ${ids.join(",")})`
+    );
+    assert(
+      (await resolveJobImagePath(previewJobId, "title")) ===
+        path.join(imageDir, "title.png"),
+      "resolves existing image path"
+    );
+    assert(
+      (await resolveJobImagePath(previewJobId, "missing")) === null,
+      "missing image resolves to null"
+    );
+    assert(
+      (await resolveJobImagePath(previewJobId, "../title")) === null,
+      "unsafe scene id resolves to null"
+    );
+
+    await fs.rm(imageDir, { recursive: true, force: true });
+  } catch (err) {
+    failed++;
+    console.error("  FAIL: pptx preview helpers threw", err);
   }
 
   console.log(`\n${"=".repeat(40)}`);

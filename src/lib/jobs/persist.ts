@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
+import { randomUUID } from "crypto";
 import { config } from "@/lib/config";
 import type { Job, OutputFormat } from "@/lib/types";
 
@@ -64,9 +65,45 @@ export function jobFilePath(jobId: string): string {
 export async function writeJobFile(job: Job): Promise<void> {
   await fs.mkdir(config.dirs.jobs, { recursive: true });
   const target = jobFilePath(job.id);
-  const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(temp, JSON.stringify(job, null, 2), "utf-8");
-  await fs.rename(temp, target);
+  // Unique temp name avoids ENOENT when concurrent saves share the same ms.
+  const temp = path.join(config.dirs.jobs, `.${job.id}.${randomUUID()}.tmp`);
+  const payload = JSON.stringify(job, null, 2);
+  await fs.writeFile(temp, payload, "utf-8");
+  try {
+    await fs.rename(temp, target);
+  } catch (err) {
+    // Fallback if rename races or temp vanished; still try a direct write.
+    try {
+      await fs.writeFile(target, payload, "utf-8");
+    } finally {
+      await fs.rm(temp, { force: true });
+    }
+    if (!(err instanceof Error && "code" in err && err.code === "ENOENT")) {
+      throw err;
+    }
+  }
+}
+
+/** Serialize disk writes per job so rapid updateJob calls do not collide. */
+const writeChains = new Map<string, Promise<void>>();
+
+export function enqueueJobWrite(job: Job): Promise<void> {
+  const previous = writeChains.get(job.id) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(async () => {
+      await writeJobFile(job);
+      await pruneJobFiles();
+    });
+
+  writeChains.set(job.id, next);
+  void next.finally(() => {
+    if (writeChains.get(job.id) === next) {
+      writeChains.delete(job.id);
+    }
+  });
+
+  return next;
 }
 
 export async function loadJobsFromDisk(): Promise<Job[]> {
@@ -76,7 +113,8 @@ export async function loadJobsFromDisk(): Promise<Job[]> {
     const jobs: Job[] = [];
 
     for (const entry of entries) {
-      if (!entry.endsWith(".json")) continue;
+      // Only final job metadata files (not .tmp sidecars).
+      if (!/^[0-9a-f-]+\.json$/i.test(entry)) continue;
       try {
         const raw = await fs.readFile(
           path.join(config.dirs.jobs, entry),
@@ -104,7 +142,7 @@ export async function pruneJobFiles(
 ): Promise<void> {
   try {
     const entries = await fs.readdir(config.dirs.jobs);
-    const jsonFiles = entries.filter((e) => e.endsWith(".json"));
+    const jsonFiles = entries.filter((e) => /^[0-9a-f-]+\.json$/i.test(e));
     if (jsonFiles.length <= maxKeep) return;
 
     const withStats = await Promise.all(
