@@ -4,6 +4,7 @@ import {
   AUTO_DURATION_MIN_SECONDS,
   estimateAutoDuration,
 } from "../src/lib/duration";
+import { ensureNarrationScript } from "../src/lib/gemini/analyze";
 import { buildCompositionHtml } from "../src/lib/hyperframes/build-composition";
 import { mapChartType, buildPptx } from "../src/lib/pptx/build-pptx";
 import {
@@ -455,6 +456,68 @@ assert(
   untitled.title === "Brief from prompt alone",
   "history falls back to prompt when title missing"
 );
+
+console.log("\nensureNarrationScript:");
+{
+  const withScript = {
+    ...mockPresentation,
+    narrationScript: "  Keep me.  ",
+  };
+  ensureNarrationScript(withScript);
+  assert(
+    withScript.narrationScript === "Keep me.",
+    "trims existing narrationScript"
+  );
+
+  const fromScenesOnly: PresentationData = {
+    ...mockPresentation,
+    narrationScript: "",
+    scenes: [
+      {
+        id: "a",
+        startTime: 0,
+        duration: 5,
+        type: "title",
+        content: { headline: "A" },
+        narration: "Hello there.",
+      },
+      {
+        id: "b",
+        startTime: 5,
+        duration: 5,
+        type: "closing",
+        content: { headline: "B" },
+        narration: "Goodbye now.",
+      },
+    ],
+  };
+  ensureNarrationScript(fromScenesOnly);
+  assert(
+    fromScenesOnly.narrationScript === "Hello there. Goodbye now.",
+    "builds narrationScript from scene narrations"
+  );
+
+  let threw = false;
+  try {
+    ensureNarrationScript({
+      ...mockPresentation,
+      narrationScript: "",
+      scenes: [
+        {
+          id: "a",
+          startTime: 0,
+          duration: 5,
+          type: "title",
+          content: { headline: "A" },
+          narration: "",
+        },
+      ],
+    });
+  } catch {
+    threw = true;
+  }
+  assert(threw, "throws when no narration is available");
+}
 
 console.log("\ndeleteJobArtifacts:");
 assert(

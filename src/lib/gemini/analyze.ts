@@ -31,14 +31,17 @@ export async function analyzeReport(
   const targetNarrationWords = Math.round(
     (narrationDuration / 60) * wordsPerMinute
   );
-  const sceneCount = Math.max(4, Math.min(10, Math.round(durationSeconds / 8)));
+  const sceneCount = Math.max(
+    4,
+    Math.min(8, Math.round(durationSeconds / 25))
+  );
   const autoDuration = durationMode === "auto";
   const sceneGuidance = autoDuration
-    ? `Create 4-10 scenes. Choose the number based on how much meaningful, well-supported information the sources contain.`
+    ? `Create 4-8 scenes. Choose the number based on how much meaningful, well-supported information the sources contain.`
     : `Create ${sceneCount} scenes that tell a complete story arc: hook, context, key findings, deep dives, a concise recap, and conclusion.`;
   const narrationGuidance = autoDuration
     ? `Choose an appropriate narrative scope between 65 and 360 words based on the source material and brief. Prefer a focused short video over padding, but include enough detail to tell a complete story.`
-    : `The narration script should be approximately ${targetNarrationWords} words. It must finish naturally before the video ends; do not exceed this budget.`;
+    : `Keep the full spoken narration to approximately ${targetNarrationWords} words total across all scenes. It must finish naturally before the video ends; do not exceed this budget.`;
   const timingGuidance = autoDuration
     ? `Recommend a totalDuration between ${AUTO_DURATION_MIN_SECONDS} and ${AUTO_DURATION_MAX_SECONDS} seconds that fits the narration and visuals. Scene durations must sum to that recommendation.`
     : `Scene durations must sum to exactly ${durationSeconds}.`;
@@ -52,6 +55,7 @@ export async function analyzeReport(
 - When you use information from the web, include the domain in your sourceAttribution (e.g. "Company Report + reuters.com, nasdaq.com").`
     : "";
 
+  // Put compact top-level fields first so truncation is less likely to drop them.
   const systemPrompt = `You are an expert presentation designer and data analyst. Your job is to transform source documents into compelling, visually rich video presentations.
 
 You MUST return valid JSON matching the schema below. No markdown, no explanation, just JSON.
@@ -61,13 +65,14 @@ RULES:
 - Every claim should reference the source material.${webSearchGuidance}
 - ${sceneGuidance}
 - ${narrationGuidance}
-- Include charts with real data from the source where appropriate. Use bars for comparisons, lines for trends, donuts for compositions.
-- Each scene's narration field should contain only that scene's portion of the script.
+- Put each scene's spoken lines ONLY in that scene's "narration" field. Do NOT duplicate a full top-level narrationScript (omit it or leave it empty); it will be assembled from scenes.
+- Include charts with real data from the source where appropriate. Use bars for comparisons, lines for trends, donuts for compositions. Keep chart data arrays short (3-6 points).
 - ${timingGuidance}
 - ${closingGuidance}
 - The closing scene must summarize the main conclusion, include 2-3 concise factual takeaways in content.bullets, and end its narration with a complete, conclusive sentence. Do not introduce unsupported facts.
 - KPI scenes should highlight a single dramatic metric with year-over-year or quarter-over-quarter change.
 - Choose a color palette that fits the brand/topic (financial = deep blues/greens, tech = dark/neon, etc).
+- Keep content fields concise so the full JSON fits in one response.
 
 JSON SCHEMA:
 {
@@ -107,12 +112,18 @@ JSON SCHEMA:
       "narration": "string - this scene's narration segment",
       "transition": "fade|slide|zoom"
     }
-  ],
-  "narrationScript": "string - the complete narration script, all scenes concatenated"
+  ]
 }`;
+
+  // Longer videos need more output budget; avoid cutting off mid-JSON.
+  const maxTokens = Math.min(
+    24_000,
+    Math.max(10_000, 6_000 + sceneCount * 1_200 + Math.round(targetNarrationWords * 2))
+  );
 
   let raw: string;
   let citationAnnotations: Array<{ type?: string; url?: string; title?: string }> = [];
+  let finishReason: string | undefined;
   try {
     const requestBody: Record<string, unknown> = {
       model: OPENROUTER_CHAT_MODEL,
@@ -126,7 +137,7 @@ JSON SCHEMA:
       response_format: { type: "json_object" },
       plugins: [{ id: "response-healing" }],
       temperature: 0.7,
-      max_tokens: 10_000,
+      max_tokens: maxTokens,
     };
 
     if (allowWebSearch) {
@@ -145,6 +156,7 @@ JSON SCHEMA:
 
     const completion = (await response.json()) as {
       choices?: Array<{
+        finish_reason?: string | null;
         message?: {
           content?: string | null;
           annotations?: Array<{
@@ -156,6 +168,7 @@ JSON SCHEMA:
       }>;
     };
     raw = completion.choices?.[0]?.message?.content ?? "";
+    finishReason = completion.choices?.[0]?.finish_reason ?? undefined;
     citationAnnotations = completion.choices?.[0]?.message?.annotations ?? [];
   } catch (err) {
     throw new Error(parseOpenRouterError(err));
@@ -167,7 +180,17 @@ JSON SCHEMA:
     );
   }
 
-  const parsed = extractJson<PresentationData>(raw);
+  let parsed: PresentationData;
+  try {
+    parsed = extractJson<PresentationData>(raw);
+  } catch (err) {
+    if (finishReason === "length" || finishReason === "max_tokens") {
+      throw new Error(
+        "The presentation JSON was truncated because the response ran out of tokens. Try a shorter duration or retry."
+      );
+    }
+    throw err;
+  }
 
   if (citationAnnotations.length > 0) {
     const domains = new Set<string>();
@@ -188,6 +211,8 @@ JSON SCHEMA:
         : domainList;
     }
   }
+
+  ensureNarrationScript(parsed);
 
   const finalDuration = autoDuration
     ? estimateAutoDuration(parsed.narrationScript, parsed.scenes.length)
@@ -245,7 +270,7 @@ function validatePresentation(data: PresentationData, expectedDuration: number) 
   if (!data.title) throw new Error("Missing presentation title");
   if (!data.scenes || data.scenes.length < 2)
     throw new Error("Need at least 2 scenes");
-  if (!data.narrationScript) throw new Error("Missing narration script");
+  ensureNarrationScript(data);
 
   const totalSceneDuration = data.scenes.reduce(
     (sum, s) => sum + s.duration,
@@ -267,4 +292,28 @@ function validatePresentation(data: PresentationData, expectedDuration: number) 
   }
 
   data.totalDuration = expectedDuration;
+}
+
+/**
+ * Prefer an explicit top-level script; otherwise join per-scene narration.
+ * Long videos often omit narrationScript when the JSON is near the token limit.
+ */
+export function ensureNarrationScript(data: PresentationData): void {
+  const existing = data.narrationScript?.trim();
+  if (existing) {
+    data.narrationScript = existing;
+    return;
+  }
+
+  const fromScenes = (data.scenes ?? [])
+    .map((scene) => scene.narration?.trim())
+    .filter((part): part is string => !!part)
+    .join(" ")
+    .trim();
+
+  if (!fromScenes) {
+    throw new Error("Missing narration script");
+  }
+
+  data.narrationScript = fromScenes;
 }
