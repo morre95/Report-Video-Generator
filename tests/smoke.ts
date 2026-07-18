@@ -7,7 +7,11 @@ import {
 import { buildCompositionHtml } from "../src/lib/hyperframes/build-composition";
 import { mapChartType, buildPptx } from "../src/lib/pptx/build-pptx";
 import { selectScenesForImages } from "../src/lib/openrouter/images";
-import type { PresentationData, Scene } from "../src/lib/types";
+import {
+  jobToHistoryItem,
+  sanitizeJobArtifacts,
+} from "../src/lib/jobs/persist";
+import type { Job, PresentationData, Scene } from "../src/lib/types";
 import fs from "fs/promises";
 import path from "path";
 import { config } from "../src/lib/config";
@@ -385,6 +389,65 @@ assert(
   "selects visualDirection scene when capacity remains"
 );
 assert(selectScenesForImages(imagePickPresentation, 1).length === 1, "respects maxImages");
+
+// --- job history helpers ---
+console.log("\njob history helpers:");
+
+const historyJob: Job = {
+  id: "hist-1",
+  status: "complete",
+  progress: 100,
+  createdAt: Date.now(),
+  config: {
+    prompt: "Investor update",
+    duration: 60,
+    durationMode: "auto",
+    outputFormat: "both",
+    aspectRatio: "16:9",
+    fps: 30,
+    voice: "Charon",
+    backgroundMusic: "lofi7.mp3",
+    fileNames: ["report.pdf"],
+    allowWebSearch: false,
+  },
+  presentation: {
+    ...mockPresentation,
+    title: "Q1 Results",
+  },
+  outputPath: "/tmp/does-not-exist-video.mp4",
+  pptxPath: "/tmp/does-not-exist-deck.pptx",
+};
+
+const sanitized = sanitizeJobArtifacts(historyJob, () => false);
+assert(!sanitized.outputPath, "missing video artifact clears outputPath");
+assert(!sanitized.pptxPath, "missing pptx artifact clears pptxPath");
+
+const roundTrip = JSON.parse(JSON.stringify(historyJob)) as Job;
+assert(roundTrip.id === historyJob.id, "job JSON round-trip keeps id");
+assert(
+  roundTrip.presentation?.title === "Q1 Results",
+  "job JSON round-trip keeps presentation title"
+);
+
+const item = jobToHistoryItem({
+  ...sanitized,
+  outputPath: undefined,
+  pptxPath: "/real/path.pptx",
+});
+assert(item.title === "Q1 Results", "history item uses presentation title");
+assert(item.hasVideo === false, "history item hasVideo false without path");
+assert(item.hasPptx === true, "history item hasPptx true with path");
+assert(item.outputFormat === "both", "history item keeps outputFormat");
+
+const untitled = jobToHistoryItem({
+  ...historyJob,
+  presentation: undefined,
+  config: { ...historyJob.config, prompt: "Brief from prompt alone" },
+});
+assert(
+  untitled.title === "Brief from prompt alone",
+  "history falls back to prompt when title missing"
+);
 
 // --- buildPptx ---
 console.log("\nbuildPptx:");

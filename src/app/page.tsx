@@ -28,6 +28,31 @@ interface JobState {
   hasPptx?: boolean;
 }
 
+interface HistoryItem {
+  id: string;
+  createdAt: number;
+  status: string;
+  title: string;
+  outputFormat: OutputFormat;
+  hasVideo: boolean;
+  hasPptx: boolean;
+  fileNames: string[];
+  error?: string;
+  progress: number;
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const deltaMs = Date.now() - timestamp;
+  const minutes = Math.floor(deltaMs / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  return new Date(timestamp).toLocaleDateString();
+}
+
 const STATUS_LABELS: Record<string, string> = {
   idle: "Ready",
   uploading: "Uploading document...",
@@ -83,6 +108,34 @@ export default function Home() {
     ok: boolean;
     error?: string;
   }>({ checked: false, ok: true });
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(true);
+
+  const refreshHistory = useCallback(async () => {
+    try {
+      const res = await fetch("/api/jobs");
+      if (!res.ok) return;
+      const data = (await res.json()) as { jobs?: HistoryItem[] };
+      setHistory(data.jobs ?? []);
+    } catch {
+      // ignore history load errors
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/jobs")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { jobs?: HistoryItem[] } | null) => {
+        if (!cancelled && data) setHistory(data.jobs ?? []);
+      })
+      .catch(() => {
+        // ignore
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     fetch("/api/check-key")
@@ -176,34 +229,88 @@ export default function Home() {
     }
   }, []);
 
-  const pollJob = useCallback((jobId: string) => {
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
+  const pollJob = useCallback(
+    (jobId: string) => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/jobs/${jobId}`);
+          const data = await res.json();
+          setJob({
+            id: jobId,
+            status: data.status,
+            progress: data.progress,
+            error: data.error ?? null,
+            durationSeconds: data.presentation?.totalDuration,
+            hasVideo: !!data.outputPath,
+            hasPptx: !!data.pptxPath,
+          });
+
+          if (data.status === "complete") {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setVideoUrl(data.outputPath ? `/api/jobs/${jobId}/render` : null);
+            setPptxUrl(data.pptxPath ? `/api/jobs/${jobId}/pptx` : null);
+            void refreshHistory();
+          } else if (data.status === "error") {
+            if (pollRef.current) clearInterval(pollRef.current);
+            void refreshHistory();
+          }
+        } catch {
+          // retry on next interval
+        }
+      }, 1500);
+    },
+    [refreshHistory]
+  );
+
+  const openHistoryJob = useCallback(
+    async (item: HistoryItem) => {
+      const isTerminal = item.status === "complete" || item.status === "error";
+
+      if (!isTerminal) {
+        pollJob(item.id);
+        setJob({
+          id: item.id,
+          status: item.status as JobStatus,
+          progress: item.progress,
+          error: item.error ?? null,
+          hasVideo: item.hasVideo,
+          hasPptx: item.hasPptx,
+        });
+        return;
+      }
+
+      if (pollRef.current) clearInterval(pollRef.current);
+
       try {
-        const res = await fetch(`/api/jobs/${jobId}`);
+        const res = await fetch(`/api/jobs/${item.id}`);
+        if (!res.ok) return;
         const data = await res.json();
         setJob({
-          id: jobId,
+          id: item.id,
           status: data.status,
-          progress: data.progress,
+          progress: data.progress ?? (data.status === "complete" ? 100 : 0),
           error: data.error ?? null,
           durationSeconds: data.presentation?.totalDuration,
           hasVideo: !!data.outputPath,
           hasPptx: !!data.pptxPath,
         });
-
-        if (data.status === "complete") {
-          if (pollRef.current) clearInterval(pollRef.current);
-          setVideoUrl(data.outputPath ? `/api/jobs/${jobId}/render` : null);
-          setPptxUrl(data.pptxPath ? `/api/jobs/${jobId}/pptx` : null);
-        } else if (data.status === "error") {
-          if (pollRef.current) clearInterval(pollRef.current);
-        }
+        setVideoUrl(
+          data.status === "complete" && data.outputPath
+            ? `/api/jobs/${item.id}/render`
+            : null
+        );
+        setPptxUrl(
+          data.status === "complete" && data.pptxPath
+            ? `/api/jobs/${item.id}/pptx`
+            : null
+        );
       } catch {
-        // retry on next interval
+        // ignore
       }
-    }, 1500);
-  }, []);
+    },
+    [pollJob]
+  );
 
   useEffect(() => {
     const musicPreview = musicPreviewRef.current;
@@ -259,6 +366,7 @@ export default function Home() {
       if (!res.ok) throw new Error(data.error);
       setJob({ id: data.jobId, status: "uploading", progress: 10, error: null });
       pollJob(data.jobId);
+      void refreshHistory();
     } catch (err) {
       setJob({
         id: null,
@@ -280,6 +388,7 @@ export default function Home() {
     backgroundMusic,
     allowWebSearch,
     pollJob,
+    refreshHistory,
   ]);
 
   const isProcessing =
@@ -894,6 +1003,124 @@ export default function Home() {
                 )}
               </div>
             )}
+
+            {/* History */}
+            <div
+              className="rounded-xl overflow-hidden"
+              style={{ border: "1px solid var(--border)" }}
+            >
+              <button
+                type="button"
+                onClick={() => setHistoryOpen((open) => !open)}
+                className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold"
+                style={{
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-primary)",
+                }}
+              >
+                <span>History</span>
+                <span
+                  className="text-xs font-normal"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  {history.length} · {historyOpen ? "Hide" : "Show"}
+                </span>
+              </button>
+              {historyOpen && (
+                <div className="max-h-64 overflow-y-auto">
+                  {history.length === 0 ? (
+                    <p
+                      className="px-4 py-3 text-xs"
+                      style={{ color: "var(--text-secondary)" }}
+                    >
+                      No generations yet. Finished jobs appear here and survive
+                      server restarts.
+                    </p>
+                  ) : (
+                    <ul>
+                      {history.map((item) => {
+                        const active = job.id === item.id;
+                        return (
+                          <li key={item.id}>
+                            <button
+                              type="button"
+                              onClick={() => void openHistoryJob(item)}
+                              className="w-full text-left px-4 py-3 transition-colors"
+                              style={{
+                                background: active
+                                  ? "rgba(99, 102, 241, 0.08)"
+                                  : "transparent",
+                                borderTop: "1px solid var(--border)",
+                              }}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <p
+                                  className="text-xs font-medium truncate"
+                                  style={{ color: "var(--text-primary)" }}
+                                >
+                                  {item.title}
+                                </p>
+                                <span
+                                  className="text-[10px] flex-shrink-0"
+                                  style={{ color: "var(--text-secondary)" }}
+                                >
+                                  {formatRelativeTime(item.createdAt)}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                {item.status === "error" ? (
+                                  <span
+                                    className="text-[10px] px-1.5 py-0.5 rounded"
+                                    style={{
+                                      background: "rgba(239, 68, 68, 0.12)",
+                                      color: "var(--error)",
+                                    }}
+                                  >
+                                    Error
+                                  </span>
+                                ) : item.status !== "complete" ? (
+                                  <span
+                                    className="text-[10px] px-1.5 py-0.5 rounded"
+                                    style={{
+                                      background: "rgba(99, 102, 241, 0.12)",
+                                      color: "var(--accent)",
+                                    }}
+                                  >
+                                    {STATUS_LABELS[item.status] ?? item.status}
+                                  </span>
+                                ) : null}
+                                {item.hasVideo && (
+                                  <span
+                                    className="text-[10px] px-1.5 py-0.5 rounded"
+                                    style={{
+                                      background: "var(--bg-tertiary)",
+                                      color: "var(--text-secondary)",
+                                    }}
+                                  >
+                                    Video
+                                  </span>
+                                )}
+                                {item.hasPptx && (
+                                  <span
+                                    className="text-[10px] px-1.5 py-0.5 rounded"
+                                    style={{
+                                      background: "var(--bg-tertiary)",
+                                      color: "var(--text-secondary)",
+                                    }}
+                                  >
+                                    PowerPoint
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

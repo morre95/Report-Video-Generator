@@ -4,6 +4,7 @@ Transform reports and documents into animated video presentations with AI-genera
 
 ## Features
 
+- **Generation History** — Browse past jobs in the History panel. Metadata is saved under `.runtime/jobs/` (newest 50 kept) and survives server restarts; click an entry to reload its preview/downloads.
 - **Output Modes** — Choose **Video**, **PowerPoint**, or **Both**. PowerPoint decks include native charts, shapes, speaker notes, and up to 3 AI slide images via OpenRouter (`google/gemini-2.5-flash-image`; image charges apply).
 - **Multi-Document Upload** — Drag-and-drop up to 10 PDF, DOCX, TXT, or Markdown files (20 MB each, 50 MB combined). Sources are deduplicated and text is balanced across a 200K-character budget so later files are not discarded.
 - **AI Analysis** — Gemini 3.5 Flash through OpenRouter extracts key metrics, charts, and creates a narration script
@@ -49,6 +50,7 @@ Open [http://localhost:3000](http://localhost:3000).
 5. Keep the recommended **Auto** duration or choose **Manual**, then adjust aspect ratio and (for video) FPS, voice, and background music
 6. Click **Generate Video**
 7. Preview the video and/or download the MP4 / PowerPoint file
+8. Open **History** to revisit earlier generations (persisted across restarts)
 
 ## Architecture
 
@@ -73,8 +75,8 @@ src/
     hyperframes/
       build-composition.ts  # Presentation data → animated HTML
       render.ts             # HTML → MP4 via Hyperframes CLI
-    jobs/                 # In-memory job store
+    jobs/                 # In-memory + disk-backed job store (.runtime/jobs)
 data/demos/               # Pre-built demo fixtures
 public/audio/             # Background music (lofi7.mp3)
-.runtime/                 # Uploads, compositions, audio, images, pptx, renders (gitignored)
+.runtime/                 # Uploads, compositions, audio, images, pptx, jobs, renders (gitignored)
 ```

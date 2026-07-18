@@ -11,6 +11,7 @@ export const config = {
     renders: path.join(ROOT, ".runtime/renders"),
     images: path.join(ROOT, ".runtime/images"),
     pptx: path.join(ROOT, ".runtime/pptx"),
+    jobs: path.join(ROOT, ".runtime/jobs"),
     publicAudio: path.join(ROOT, "public/audio"),
   },
   defaults: {
@@ -23,6 +24,7 @@ export const config = {
     musicVolume: -26,
     outputFormat: "video" as const,
     maxPptxImages: 3,
+    maxHistoryJobs: 50,
   },
   limits: {
     maxFileSize: 20 * 1024 * 1024, // 20 MB

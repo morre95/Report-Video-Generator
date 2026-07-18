@@ -13,11 +13,15 @@ import { generatePresentationImages } from "@/lib/openrouter/images";
 import { buildPptx } from "@/lib/pptx/build-pptx";
 import { retimeScenes } from "@/lib/timing";
 import { setJob, updateJob, getJob, listJobs } from "@/lib/jobs/store";
+import { jobToHistoryItem } from "@/lib/jobs/persist";
 import { resolveBackgroundMusic } from "@/lib/music";
 import type { Job, OutputFormat, PresentationData } from "@/lib/types";
 
 export async function GET() {
-  return NextResponse.json({ jobs: listJobs() });
+  const jobs = await listJobs();
+  return NextResponse.json({
+    jobs: jobs.map(jobToHistoryItem),
+  });
 }
 
 function sanitizeFileName(name: string): string {
@@ -155,7 +159,7 @@ async function processJob(
   files: File[],
   preloadedText: string
 ) {
-  const job = getJob(jobId)!;
+  const job = (await getJob(jobId))!;
   const cfg = job.config;
   const wantsVideo = cfg.outputFormat === "video" || cfg.outputFormat === "both";
   const wantsPptx = cfg.outputFormat === "pptx" || cfg.outputFormat === "both";
@@ -213,7 +217,7 @@ async function processJob(
 
   if (wantsVideo) {
     await buildVideoOutput(jobId, presentation, cfg);
-    const updated = getJob(jobId)!;
+    const updated = (await getJob(jobId))!;
     compositionPath = updated.compositionPath;
     outputPath = updated.outputPath;
   }
