@@ -9,6 +9,8 @@ export const config = {
     compositions: path.join(ROOT, ".runtime/compositions"),
     audio: path.join(ROOT, ".runtime/audio"),
     renders: path.join(ROOT, ".runtime/renders"),
+    images: path.join(ROOT, ".runtime/images"),
+    pptx: path.join(ROOT, ".runtime/pptx"),
     publicAudio: path.join(ROOT, "public/audio"),
   },
   defaults: {
@@ -19,6 +21,8 @@ export const config = {
     aspectRatio: "16:9" as const,
     voice: "Charon",
     musicVolume: -26,
+    outputFormat: "video" as const,
+    maxPptxImages: 3,
   },
   limits: {
     maxFileSize: 20 * 1024 * 1024, // 20 MB

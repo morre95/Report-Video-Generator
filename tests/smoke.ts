@@ -5,7 +5,12 @@ import {
   estimateAutoDuration,
 } from "../src/lib/duration";
 import { buildCompositionHtml } from "../src/lib/hyperframes/build-composition";
+import { mapChartType, buildPptx } from "../src/lib/pptx/build-pptx";
+import { selectScenesForImages } from "../src/lib/openrouter/images";
 import type { PresentationData, Scene } from "../src/lib/types";
+import fs from "fs/promises";
+import path from "path";
+import { config } from "../src/lib/config";
 
 let passed = 0;
 let failed = 0;
@@ -323,7 +328,91 @@ assert(
 const withoutSearch = buildRequestBody(false);
 assert(withoutSearch.tools === undefined, "web search disabled → no tools key");
 
-// --- Summary ---
-console.log(`\n${"=".repeat(40)}`);
-console.log(`Results: ${passed} passed, ${failed} failed`);
-process.exit(failed > 0 ? 1 : 0);
+// --- PPTX chart mapping ---
+console.log("\nmapChartType:");
+
+assert(mapChartType("bar") === "bar", "bar → bar");
+assert(mapChartType("line") === "line", "line → line");
+assert(mapChartType("donut") === "doughnut", "donut → doughnut");
+assert(mapChartType("comparison") === "bar", "comparison → bar");
+
+// --- selectScenesForImages ---
+console.log("\nselectScenesForImages:");
+
+const imagePickPresentation: PresentationData = {
+  ...mockPresentation,
+  scenes: [
+    {
+      id: "title",
+      startTime: 0,
+      duration: 5,
+      type: "title",
+      content: { headline: "Title" },
+      narration: "intro",
+    },
+    {
+      id: "chart",
+      startTime: 5,
+      duration: 10,
+      type: "chart",
+      content: {
+        headline: "Chart",
+        visualDirection: "abstract data viz",
+        chart: {
+          type: "bar",
+          title: "Revenue",
+          data: [{ label: "A", value: 1 }],
+        },
+      },
+      narration: "chart",
+    },
+    {
+      id: "closing",
+      startTime: 15,
+      duration: 5,
+      type: "closing",
+      content: { headline: "Close", bullets: ["a", "b"] },
+      narration: "end",
+    },
+  ],
+};
+
+const picked = selectScenesForImages(imagePickPresentation, 3);
+assert(picked.some((s) => s.type === "title"), "selects title scene");
+assert(picked.some((s) => s.type === "closing"), "selects closing scene");
+assert(
+  picked.some((s) => s.id === "chart"),
+  "selects visualDirection scene when capacity remains"
+);
+assert(selectScenesForImages(imagePickPresentation, 1).length === 1, "respects maxImages");
+
+// --- buildPptx ---
+console.log("\nbuildPptx:");
+
+void (async () => {
+  try {
+    const pptxJobId = "smoke-pptx-test";
+    const pptxPath = await buildPptx(mockPresentation, pptxJobId, {
+      aspectRatio: "16:9",
+      images: {},
+    });
+    const pptxStat = await fs.stat(pptxPath);
+    assert(pptxStat.isFile(), "pptx file was written");
+    assert(pptxStat.size > 1_000, `pptx has content (${pptxStat.size} bytes)`);
+    assert(
+      path.dirname(pptxPath) === path.join(config.dirs.pptx, pptxJobId),
+      "pptx written under runtime pptx dir"
+    );
+    await fs.rm(path.join(config.dirs.pptx, pptxJobId), {
+      recursive: true,
+      force: true,
+    });
+  } catch (err) {
+    failed++;
+    console.error("  FAIL: buildPptx threw", err);
+  }
+
+  console.log(`\n${"=".repeat(40)}`);
+  console.log(`Results: ${passed} passed, ${failed} failed`);
+  process.exit(failed > 0 ? 1 : 0);
+})();

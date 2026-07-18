@@ -4,12 +4,15 @@ import { useState, useCallback, useRef, useEffect } from "react";
 
 type AspectRatio = "16:9" | "4:3" | "9:16" | "1:1";
 type DurationMode = "auto" | "manual";
+type OutputFormat = "video" | "pptx" | "both";
 type JobStatus =
   | "idle"
   | "uploading"
   | "extracting"
   | "analyzing"
   | "generating_tts"
+  | "generating_images"
+  | "building_pptx"
   | "composing"
   | "rendering"
   | "complete"
@@ -21,6 +24,8 @@ interface JobState {
   progress: number;
   error: string | null;
   durationSeconds?: number;
+  hasVideo?: boolean;
+  hasPptx?: boolean;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -29,6 +34,8 @@ const STATUS_LABELS: Record<string, string> = {
   extracting: "Extracting text...",
   analyzing: "AI is analyzing your report...",
   generating_tts: "Generating voiceover...",
+  generating_images: "Generating slide images...",
+  building_pptx: "Building PowerPoint...",
   composing: "Building video composition...",
   rendering: "Rendering MP4...",
   complete: "Complete!",
@@ -49,6 +56,7 @@ export default function Home() {
   const [prompt, setPrompt] = useState("");
   const [duration, setDuration] = useState(60);
   const [durationMode, setDurationMode] = useState<DurationMode>("auto");
+  const [outputFormat, setOutputFormat] = useState<OutputFormat>("video");
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("16:9");
   const [fps, setFps] = useState(30);
   const [voice, setVoice] = useState("Charon");
@@ -63,6 +71,7 @@ export default function Home() {
     error: null,
   });
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [pptxUrl, setPptxUrl] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -179,11 +188,14 @@ export default function Home() {
           progress: data.progress,
           error: data.error ?? null,
           durationSeconds: data.presentation?.totalDuration,
+          hasVideo: !!data.outputPath,
+          hasPptx: !!data.pptxPath,
         });
 
         if (data.status === "complete") {
           if (pollRef.current) clearInterval(pollRef.current);
-          setVideoUrl(`/api/jobs/${jobId}/render`);
+          setVideoUrl(data.outputPath ? `/api/jobs/${jobId}/render` : null);
+          setPptxUrl(data.pptxPath ? `/api/jobs/${jobId}/pptx` : null);
         } else if (data.status === "error") {
           if (pollRef.current) clearInterval(pollRef.current);
         }
@@ -224,6 +236,7 @@ export default function Home() {
 
     setJob({ id: null, status: "uploading", progress: 5, error: null });
     setVideoUrl(null);
+    setPptxUrl(null);
 
     const formData = new FormData();
     for (const f of files) {
@@ -233,6 +246,7 @@ export default function Home() {
     formData.append("prompt", prompt);
     formData.append("duration", String(duration));
     formData.append("durationMode", durationMode);
+    formData.append("outputFormat", outputFormat);
     formData.append("aspectRatio", aspectRatio);
     formData.append("fps", String(fps));
     formData.append("voice", voice);
@@ -259,6 +273,7 @@ export default function Home() {
     prompt,
     duration,
     durationMode,
+    outputFormat,
     aspectRatio,
     fps,
     voice,
@@ -273,6 +288,9 @@ export default function Home() {
     job.status !== "error";
 
   const hasInput = files.length > 0 || !!sourceText;
+  const wantsVideo = outputFormat === "video" || outputFormat === "both";
+  const wantsPptx = outputFormat === "pptx" || outputFormat === "both";
+  const showVideoControls = wantsVideo;
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "var(--bg-primary)" }}>
@@ -503,6 +521,56 @@ export default function Home() {
               />
             </div>
 
+            {/* Output format */}
+            <div>
+              <label
+                className="block text-sm font-semibold mb-2"
+                style={{ color: "var(--text-primary)" }}
+              >
+                Output
+              </label>
+              <div
+                className="grid grid-cols-3 rounded-lg p-1"
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border)",
+                }}
+              >
+                {(
+                  [
+                    { id: "video", label: "Video" },
+                    { id: "pptx", label: "PowerPoint" },
+                    { id: "both", label: "Both" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setOutputFormat(opt.id)}
+                    aria-pressed={outputFormat === opt.id}
+                    className="rounded-md px-2 py-2 text-xs font-medium transition-all"
+                    style={{
+                      background:
+                        outputFormat === opt.id ? "var(--accent)" : "transparent",
+                      color:
+                        outputFormat === opt.id ? "#fff" : "var(--text-secondary)",
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {wantsPptx && (
+                <p
+                  className="text-[11px] mt-2 leading-relaxed"
+                  style={{ color: "var(--text-secondary)" }}
+                >
+                  PowerPoint includes native charts and up to{" "}
+                  {3} AI slide images (OpenRouter charges apply).
+                </p>
+              )}
+            </div>
+
             {/* Settings grid */}
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -510,7 +578,7 @@ export default function Home() {
                   className="block text-xs font-medium mb-1.5"
                   style={{ color: "var(--text-secondary)" }}
                 >
-                  Video Duration
+                  {wantsVideo ? "Video Duration" : "Story Length"}
                 </label>
                 <div
                   className="grid grid-cols-2 rounded-lg p-1"
@@ -597,55 +665,60 @@ export default function Home() {
                 </select>
               </div>
 
-              <div>
-                <label
-                  className="block text-xs font-medium mb-1.5"
-                  style={{ color: "var(--text-secondary)" }}
-                >
-                  FPS
-                </label>
-                <select
-                  value={fps}
-                  onChange={(e) => setFps(parseInt(e.target.value))}
-                  className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none appearance-none"
-                  style={{
-                    background: "var(--bg-tertiary)",
-                    border: "1px solid var(--border)",
-                    color: "var(--text-primary)",
-                  }}
-                >
-                  <option value="24">24 fps</option>
-                  <option value="30">30 fps</option>
-                  <option value="60">60 fps</option>
-                </select>
-              </div>
+              {showVideoControls && (
+                <div>
+                  <label
+                    className="block text-xs font-medium mb-1.5"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    FPS
+                  </label>
+                  <select
+                    value={fps}
+                    onChange={(e) => setFps(parseInt(e.target.value))}
+                    className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none appearance-none"
+                    style={{
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border)",
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    <option value="24">24 fps</option>
+                    <option value="30">30 fps</option>
+                    <option value="60">60 fps</option>
+                  </select>
+                </div>
+              )}
 
-              <div>
-                <label
-                  className="block text-xs font-medium mb-1.5"
-                  style={{ color: "var(--text-secondary)" }}
-                >
-                  Voice
-                </label>
-                <select
-                  value={voice}
-                  onChange={(e) => setVoice(e.target.value)}
-                  className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none appearance-none"
-                  style={{
-                    background: "var(--bg-tertiary)",
-                    border: "1px solid var(--border)",
-                    color: "var(--text-primary)",
-                  }}
-                >
-                  {VOICES.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label} — {v.desc}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {showVideoControls && (
+                <div>
+                  <label
+                    className="block text-xs font-medium mb-1.5"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    Voice
+                  </label>
+                  <select
+                    value={voice}
+                    onChange={(e) => setVoice(e.target.value)}
+                    className="w-full rounded-lg px-3 py-2.5 text-sm focus:outline-none appearance-none"
+                    style={{
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border)",
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    {VOICES.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.label} — {v.desc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
+            {showVideoControls && (
             <div>
               <label
                 className="block text-xs font-medium mb-1.5"
@@ -708,6 +781,7 @@ export default function Home() {
                 </div>
               )}
             </div>
+            )}
 
             {/* Web search opt-in */}
             <div>
@@ -748,7 +822,13 @@ export default function Home() {
                 color: "#fff",
               }}
             >
-              {isProcessing ? STATUS_LABELS[job.status] : "Generate Video"}
+              {isProcessing
+                ? STATUS_LABELS[job.status]
+                : outputFormat === "pptx"
+                  ? "Generate PowerPoint"
+                  : outputFormat === "both"
+                    ? "Generate Video & PowerPoint"
+                    : "Generate Video"}
             </button>
 
             {/* Progress bar */}
@@ -819,53 +899,105 @@ export default function Home() {
 
         {/* Right panel — preview */}
         <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-auto">
-          {videoUrl ? (
-            <div className="w-full max-w-5xl animate-fade-up">
-              <div className="flex items-center justify-between mb-4">
+          {job.status === "complete" && (videoUrl || pptxUrl) ? (
+            <div className="w-full max-w-5xl animate-fade-up space-y-6">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
                 <h2
                   className="text-lg font-semibold"
                   style={{ color: "var(--text-primary)" }}
                 >
-                  Video Preview
+                  {videoUrl ? "Preview" : "Downloads ready"}
                 </h2>
-                <a
-                  href={`${videoUrl}?download=1`}
-                  download="report-video.mp4"
-                  className="px-4 py-2 rounded-lg text-xs font-medium transition-all"
+                <div className="flex items-center gap-2">
+                  {videoUrl && (
+                    <a
+                      href={`${videoUrl}?download=1`}
+                      download="report-video.mp4"
+                      className="px-4 py-2 rounded-lg text-xs font-medium transition-all"
+                      style={{
+                        background: "var(--accent)",
+                        color: "#fff",
+                      }}
+                    >
+                      Download MP4
+                    </a>
+                  )}
+                  {pptxUrl && (
+                    <a
+                      href={pptxUrl}
+                      download="report-presentation.pptx"
+                      className="px-4 py-2 rounded-lg text-xs font-medium transition-all"
+                      style={{
+                        background: videoUrl
+                          ? "var(--bg-tertiary)"
+                          : "var(--accent)",
+                        border: videoUrl ? "1px solid var(--border)" : undefined,
+                        color: videoUrl ? "var(--text-primary)" : "#fff",
+                      }}
+                    >
+                      Download PowerPoint
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {videoUrl && (
+                <div
+                  className="rounded-2xl overflow-hidden shadow-2xl"
                   style={{
-                    background: "var(--accent)",
-                    color: "#fff",
+                    border: "1px solid var(--border)",
+                    background: "#000",
+                    aspectRatio: aspectRatio.replace(":", "/"),
                   }}
                 >
-                  Download MP4
-                </a>
-              </div>
-              <div
-                className="rounded-2xl overflow-hidden shadow-2xl"
-                style={{
-                  border: "1px solid var(--border)",
-                  background: "#000",
-                  aspectRatio: aspectRatio.replace(":", "/"),
-                }}
-              >
-                <video
-                  key={videoUrl}
-                  src={videoUrl}
-                  controls
-                  playsInline
-                  className="w-full h-full"
-                  style={{ display: "block", background: "#000" }}
+                  <video
+                    key={videoUrl}
+                    src={videoUrl}
+                    controls
+                    playsInline
+                    className="w-full h-full"
+                    style={{ display: "block", background: "#000" }}
+                  >
+                    Your browser does not support video playback.
+                  </video>
+                </div>
+              )}
+
+              {!videoUrl && pptxUrl && (
+                <div
+                  className="rounded-2xl p-10 text-center"
+                  style={{
+                    border: "1px solid var(--border)",
+                    background: "var(--bg-secondary)",
+                  }}
                 >
-                  Your browser does not support video playback.
-                </video>
-              </div>
+                  <p
+                    className="text-lg font-semibold mb-2"
+                    style={{ color: "var(--text-primary)" }}
+                  >
+                    PowerPoint ready
+                  </p>
+                  <p
+                    className="text-sm"
+                    style={{ color: "var(--text-secondary)" }}
+                  >
+                    Your deck includes charts, shapes, and AI-generated visuals.
+                  </p>
+                </div>
+              )}
+
               <p
-                className="text-xs mt-3 text-center"
+                className="text-xs text-center"
                 style={{ color: "var(--text-secondary)" }}
               >
-                {durationMode === "auto" && job.durationSeconds
-                  ? `Auto selected ${Math.round(job.durationSeconds)} seconds. Play the finished video here, or download the MP4.`
-                  : "Play the finished video here, or download the MP4."}
+                {durationMode === "auto" && job.durationSeconds && videoUrl
+                  ? `Auto selected ${Math.round(job.durationSeconds)} seconds.`
+                  : null}{" "}
+                {videoUrl && pptxUrl
+                  ? "Play the video or download either file."
+                  : videoUrl
+                    ? "Play the finished video here, or download the MP4."
+                    : "Download the PowerPoint to open it in PowerPoint or Google Slides."}
               </p>
             </div>
           ) : isProcessing ? (
@@ -903,6 +1035,10 @@ export default function Home() {
                   ? "OpenRouter is analyzing your document and designing the scene layout, charts, and narration script..."
                   : job.status === "generating_tts"
                     ? "Generating professional voiceover narration through OpenRouter..."
+                    : job.status === "generating_images"
+                      ? "Generating AI slide images for the PowerPoint deck..."
+                      : job.status === "building_pptx"
+                        ? "Assembling charts, shapes, and images into a PowerPoint file..."
                     : job.status === "composing"
                       ? "Building the Hyperframes HTML composition with animated charts and visuals..."
                       : job.status === "rendering"

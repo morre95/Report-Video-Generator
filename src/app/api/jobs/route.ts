@@ -9,10 +9,12 @@ import { analyzeReport } from "@/lib/gemini/analyze";
 import { generateVoiceover } from "@/lib/gemini/tts";
 import { buildCompositionHtml } from "@/lib/hyperframes/build-composition";
 import { renderComposition } from "@/lib/hyperframes/render";
+import { generatePresentationImages } from "@/lib/openrouter/images";
+import { buildPptx } from "@/lib/pptx/build-pptx";
 import { retimeScenes } from "@/lib/timing";
 import { setJob, updateJob, getJob, listJobs } from "@/lib/jobs/store";
 import { resolveBackgroundMusic } from "@/lib/music";
-import type { Job } from "@/lib/types";
+import type { Job, OutputFormat, PresentationData } from "@/lib/types";
 
 export async function GET() {
   return NextResponse.json({ jobs: listJobs() });
@@ -27,6 +29,13 @@ function validateFileExtension(name: string): boolean {
   return (config.limits.allowedExtensions as readonly string[]).includes(ext);
 }
 
+function parseOutputFormat(value: FormDataEntryValue | null): OutputFormat {
+  if (value === "pptx" || value === "both" || value === "video") {
+    return value;
+  }
+  return config.defaults.outputFormat;
+}
+
 export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const uploadedFiles = formData.getAll("files") as File[];
@@ -39,6 +48,7 @@ export async function POST(req: NextRequest) {
   );
   const duration =
     durationMode === "manual" ? requestedDuration : config.defaults.duration;
+  const outputFormat = parseOutputFormat(formData.get("outputFormat"));
   const aspectRatio = ((formData.get("aspectRatio") as string) ?? "16:9") as AspectRatio;
   const fps = parseInt((formData.get("fps") as string) ?? "30", 10);
   const voice = (formData.get("voice") as string) ?? config.defaults.voice;
@@ -117,6 +127,7 @@ export async function POST(req: NextRequest) {
       prompt,
       duration,
       durationMode,
+      outputFormat,
       aspectRatio,
       fps,
       voice,
@@ -146,6 +157,8 @@ async function processJob(
 ) {
   const job = getJob(jobId)!;
   const cfg = job.config;
+  const wantsVideo = cfg.outputFormat === "video" || cfg.outputFormat === "both";
+  const wantsPptx = cfg.outputFormat === "pptx" || cfg.outputFormat === "both";
 
   updateJob(jobId, { status: "extracting", progress: 10 });
 
@@ -183,7 +196,6 @@ async function processJob(
 
   const text = buildBalancedSourceContext(sourceParts, config.limits.maxCombinedChars);
 
-  // 2. Analyze through OpenRouter
   updateJob(jobId, { status: "analyzing", progress: 25 });
   const presentation = await analyzeReport(
     text,
@@ -193,9 +205,40 @@ async function processJob(
     cfg.durationMode
   );
 
-  updateJob(jobId, { status: "generating_tts", progress: 45, presentation });
+  updateJob(jobId, { presentation, progress: 40 });
 
-  // 3. Generate voiceover
+  let compositionPath: string | undefined;
+  let outputPath: string | undefined;
+  let pptxPath: string | undefined;
+
+  if (wantsVideo) {
+    await buildVideoOutput(jobId, presentation, cfg);
+    const updated = getJob(jobId)!;
+    compositionPath = updated.compositionPath;
+    outputPath = updated.outputPath;
+  }
+
+  if (wantsPptx) {
+    pptxPath = await buildPptxOutput(jobId, presentation, cfg.aspectRatio);
+  }
+
+  updateJob(jobId, {
+    status: "complete",
+    progress: 100,
+    presentation,
+    compositionPath,
+    outputPath,
+    pptxPath,
+  });
+}
+
+async function buildVideoOutput(
+  jobId: string,
+  presentation: PresentationData,
+  cfg: Job["config"]
+) {
+  updateJob(jobId, { status: "generating_tts", progress: 45 });
+
   const { audioPath, durationSeconds: voiceoverDuration } =
     await generateVoiceover(
       presentation.narrationScript,
@@ -203,19 +246,15 @@ async function processJob(
       cfg.voice
     );
 
-  // Keep a short visual/music tail after the narrator finishes. If TTS runs
-  // longer than requested, extend the render instead of cutting off speech.
   const outputDuration = Math.max(
     presentation.totalDuration,
     Math.ceil(voiceoverDuration + 3)
   );
 
-  // 4. Retime scenes to match the final render duration
   presentation.scenes = retimeScenes(presentation.scenes, outputDuration);
   presentation.totalDuration = outputDuration;
 
-  // 5. Build composition
-  updateJob(jobId, { status: "composing", progress: 60 });
+  updateJob(jobId, { status: "composing", progress: 60, presentation });
 
   const compDir = path.join(config.dirs.compositions, jobId);
   await fs.mkdir(compDir, { recursive: true });
@@ -247,8 +286,7 @@ async function processJob(
   const compositionPath = path.join(compDir, "index.html");
   await fs.writeFile(compositionPath, html, "utf-8");
 
-  // 6. Render
-  updateJob(jobId, { status: "rendering", progress: 70 });
+  updateJob(jobId, { status: "rendering", progress: 75, compositionPath });
 
   const renderDir = path.join(config.dirs.renders, jobId);
   await fs.mkdir(renderDir, { recursive: true });
@@ -261,13 +299,28 @@ async function processJob(
     duration: outputDuration,
   });
 
-  updateJob(jobId, {
-    status: "complete",
-    progress: 100,
+  updateJob(jobId, { outputPath, compositionPath, presentation });
+}
+
+async function buildPptxOutput(
+  jobId: string,
+  presentation: PresentationData,
+  aspectRatio: AspectRatio
+): Promise<string> {
+  updateJob(jobId, { status: "generating_images", progress: 82 });
+  const images = await generatePresentationImages(
     presentation,
-    compositionPath,
-    outputPath,
+    jobId,
+    aspectRatio
+  );
+
+  updateJob(jobId, { status: "building_pptx", progress: 92 });
+  const pptxPath = await buildPptx(presentation, jobId, {
+    aspectRatio,
+    images,
   });
+  updateJob(jobId, { pptxPath });
+  return pptxPath;
 }
 
 /**

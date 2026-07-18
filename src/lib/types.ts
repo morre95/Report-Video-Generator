@@ -49,11 +49,15 @@ export interface PresentationData {
   };
 }
 
+export type OutputFormat = "video" | "pptx" | "both";
+
 export type JobStatus =
   | "uploading"
   | "extracting"
   | "analyzing"
   | "generating_tts"
+  | "generating_images"
+  | "building_pptx"
   | "composing"
   | "rendering"
   | "complete"
@@ -68,6 +72,7 @@ export interface Job {
   presentation?: PresentationData;
   compositionPath?: string;
   outputPath?: string;
+  pptxPath?: string;
   createdAt: number;
 }
 
@@ -75,6 +80,7 @@ export interface JobConfig {
   prompt: string;
   duration: number;
   durationMode: "auto" | "manual";
+  outputFormat: OutputFormat;
   aspectRatio: "16:9" | "4:3" | "9:16" | "1:1";
   fps: number;
   voice: string;
