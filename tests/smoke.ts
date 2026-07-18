@@ -53,6 +53,7 @@ import {
   startTrackedJob,
 } from "../src/lib/jobs/control";
 import { recoverInterruptedJob } from "../src/lib/jobs/store";
+import { createJobArchive } from "../src/lib/jobs/archive";
 
 let passed = 0;
 let failed = 0;
@@ -730,6 +731,40 @@ assert(!isSafeJobId("../etc"), "rejects path traversal job id");
 assert(!isSafeJobId("smoke-pptx-test"), "rejects non-uuid job id");
 
 void (async () => {
+  console.log("\njob ZIP archive:");
+  try {
+    const archiveDir = path.join(config.dirs.renders, "smoke-archive-test");
+    const videoPath = path.join(archiveDir, "video.mp4");
+    const deckPath = path.join(archiveDir, "deck.pptx");
+    await fs.mkdir(archiveDir, { recursive: true });
+    await fs.writeFile(videoPath, "video-data");
+    await fs.writeFile(deckPath, "deck-data");
+
+    const archive = createJobArchive([
+      { filePath: videoPath, archiveName: "report-video.mp4" },
+      { filePath: deckPath, archiveName: "report-presentation.pptx" },
+    ]);
+    const chunks: Buffer[] = [];
+    archive.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+    const ended = new Promise<void>((resolve, reject) => {
+      archive.once("end", resolve);
+      archive.once("error", reject);
+    });
+    await archive.finalize();
+    await ended;
+    const zip = Buffer.concat(chunks);
+    assert(zip.subarray(0, 2).toString() === "PK", "ZIP has a valid signature");
+    assert(zip.includes("report-video.mp4"), "ZIP contains the video entry");
+    assert(
+      zip.includes("report-presentation.pptx"),
+      "ZIP contains the PowerPoint entry"
+    );
+    await fs.rm(archiveDir, { recursive: true, force: true });
+  } catch (err) {
+    failed++;
+    console.error("  FAIL: job ZIP archive threw", err);
+  }
+
   console.log("\ntracked job cancellation:");
   try {
     const trackedId = "cancel-test";

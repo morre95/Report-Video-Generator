@@ -527,6 +527,10 @@ export default function Home() {
   const wantsVideo = outputFormat === "video" || outputFormat === "both";
   const wantsPptx = outputFormat === "pptx" || outputFormat === "both";
   const showVideoControls = wantsVideo;
+  const zipUrl =
+    job.id && job.status === "complete" && (videoUrl || pptxUrl)
+      ? `/api/jobs/${job.id}/download`
+      : null;
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "var(--bg-primary)" }}>
@@ -1320,6 +1324,20 @@ export default function Home() {
                       Download PowerPoint
                     </a>
                   )}
+                  {zipUrl && (
+                    <a
+                      href={zipUrl}
+                      download="report-package.zip"
+                      className="px-4 py-2 rounded-lg text-xs font-medium transition-all"
+                      style={{
+                        background: "var(--bg-tertiary)",
+                        border: "1px solid var(--border)",
+                        color: "var(--text-primary)",
+                      }}
+                    >
+                      Download ZIP
+                    </a>
+                  )}
                 </div>
               </div>
 
@@ -1408,10 +1426,10 @@ export default function Home() {
                   ? `Auto selected ${Math.round(job.durationSeconds)} seconds.`
                   : null}{" "}
                 {videoUrl && pptxUrl
-                  ? "Play the video, browse the slides, or download either file."
+                  ? "Play the video, browse the slides, or download individual files or the ZIP package."
                   : videoUrl
-                    ? "Play the finished video here, or download the MP4."
-                    : "Browse the slides here, or download the PowerPoint to open it in PowerPoint or Google Slides."}
+                    ? "Play the finished video here, or download the MP4 or ZIP package."
+                    : "Browse the slides here, or download the PowerPoint or ZIP package."}
               </p>
             </div>
           ) : isProcessing ? (
