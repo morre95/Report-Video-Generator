@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getJob } from "@/lib/jobs/store";
 import fs from "fs/promises";
 import { createReadStream } from "fs";
-import { Readable } from "stream";
+import type { Readable } from "stream";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(
   req: NextRequest,
@@ -44,11 +46,10 @@ export async function GET(
       }
 
       const { start, end } = parsedRange;
-
       const chunkSize = end - start + 1;
-      const stream = createReadStream(job.outputPath, { start, end });
+      const nodeStream = createReadStream(job.outputPath, { start, end });
 
-      return new NextResponse(Readable.toWeb(stream) as ReadableStream, {
+      return new NextResponse(nodeToWebStream(nodeStream, req.signal), {
         status: 206,
         headers: {
           "Content-Type": "video/mp4",
@@ -61,8 +62,8 @@ export async function GET(
       });
     }
 
-    const stream = createReadStream(job.outputPath);
-    return new NextResponse(Readable.toWeb(stream) as ReadableStream, {
+    const nodeStream = createReadStream(job.outputPath);
+    return new NextResponse(nodeToWebStream(nodeStream, req.signal), {
       headers: {
         "Content-Type": "video/mp4",
         "Content-Length": String(fileSize),
@@ -77,6 +78,89 @@ export async function GET(
       { status: 404 }
     );
   }
+}
+
+/**
+ * Convert a Node readable into a Web ReadableStream that tolerates client
+ * aborts (video seeking cancels range requests). Readable.toWeb() throws
+ * "Controller is already closed" when the consumer disconnects mid-stream.
+ */
+function nodeToWebStream(
+  nodeStream: Readable,
+  signal?: AbortSignal
+): ReadableStream<Uint8Array> {
+  let closed = false;
+
+  const destroySource = () => {
+    if (!nodeStream.destroyed) {
+      nodeStream.destroy();
+    }
+  };
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      const onData = (chunk: Buffer | string) => {
+        if (closed) return;
+        const bytes =
+          typeof chunk === "string"
+            ? new TextEncoder().encode(chunk)
+            : new Uint8Array(chunk);
+        try {
+          controller.enqueue(bytes);
+        } catch {
+          closed = true;
+          destroySource();
+        }
+      };
+
+      const onEnd = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // Consumer already canceled.
+        }
+      };
+
+      const onError = (error: Error) => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.error(error);
+        } catch {
+          // Consumer already canceled.
+        }
+      };
+
+      const onAbort = () => {
+        if (closed) return;
+        closed = true;
+        destroySource();
+        try {
+          controller.close();
+        } catch {
+          // Already closed.
+        }
+      };
+
+      nodeStream.on("data", onData);
+      nodeStream.once("end", onEnd);
+      nodeStream.once("error", onError);
+
+      if (signal) {
+        if (signal.aborted) {
+          onAbort();
+        } else {
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
+      }
+    },
+    cancel() {
+      closed = true;
+      destroySource();
+    },
+  });
 }
 
 function parseByteRange(
