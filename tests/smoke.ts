@@ -5,6 +5,11 @@ import {
   estimateAutoDuration,
 } from "../src/lib/duration";
 import { ensureNarrationScript } from "../src/lib/gemini/analyze";
+import {
+  splitNarrationForTts,
+  TTS_MAX_CHARS,
+  TTS_TARGET_CHARS,
+} from "../src/lib/gemini/tts";
 import { buildCompositionHtml } from "../src/lib/hyperframes/build-composition";
 import { mapChartType, buildPptx } from "../src/lib/pptx/build-pptx";
 import {
@@ -19,6 +24,7 @@ import {
   isSafeJobId,
   deleteJobArtifacts,
 } from "../src/lib/jobs/persist";
+import { musicLoopIterations } from "../src/lib/music";
 import type { Job, PresentationData, Scene } from "../src/lib/types";
 import fs from "fs/promises";
 import path from "path";
@@ -203,6 +209,7 @@ assert(html.includes('id="s1"'), "scene clips have stable IDs");
 assert(html.includes("Revenue by Segment") || html.includes("Revenue Breakdown"), "HTML includes chart");
 assert(html.includes("data-volume"), "HTML includes music audio with volume");
 assert(html.includes("data-loop"), "HTML includes music loop attribute");
+assert(/\sloop[\s>]/.test(html), "HTML includes native loop attribute");
 assert(
   html.includes('id="voiceover" class="clip"'),
   "voiceover is a discoverable Hyperframes clip"
@@ -518,6 +525,73 @@ console.log("\nensureNarrationScript:");
   }
   assert(threw, "throws when no narration is available");
 }
+
+console.log("\nsplitNarrationForTts:");
+{
+  const short = splitNarrationForTts("Hello world. This is fine.");
+  assert(short.length === 1, "short script stays one chunk");
+
+  const scenes: Scene[] = [
+    {
+      id: "1",
+      startTime: 0,
+      duration: 10,
+      type: "title",
+      content: { headline: "A" },
+      narration: "Opening line one.",
+    },
+    {
+      id: "2",
+      startTime: 10,
+      duration: 10,
+      type: "kpi",
+      content: { headline: "B" },
+      narration: "Second beat with more detail about growth.",
+    },
+    {
+      id: "3",
+      startTime: 20,
+      duration: 10,
+      type: "closing",
+      content: { headline: "C" },
+      narration: "Closing thought for the audience.",
+    },
+  ];
+  const fromScenes = splitNarrationForTts("", scenes);
+  assert(
+    fromScenes.length >= 1 &&
+      fromScenes.join(" ").includes("Opening") &&
+      fromScenes.join(" ").includes("Closing"),
+    "uses scene narrations when script empty"
+  );
+
+  const longSentence = "Word ".repeat(500).trim() + ".";
+  const longChunks = splitNarrationForTts(longSentence, undefined, {
+    targetChars: TTS_TARGET_CHARS,
+    maxChars: TTS_MAX_CHARS,
+  });
+  assert(longChunks.length > 1, "long text splits into multiple chunks");
+  assert(
+    longChunks.every((c) => c.length <= TTS_MAX_CHARS),
+    "no chunk exceeds max chars"
+  );
+
+  const fiveMinWords = Array.from({ length: 620 }, (_, i) => `word${i}`).join(
+    " "
+  );
+  const fiveMinChunks = splitNarrationForTts(fiveMinWords);
+  assert(
+    fiveMinChunks.length >= 3,
+    `300s-scale script yields multiple chunks (got ${fiveMinChunks.length})`
+  );
+}
+
+console.log("\nmusicLoopIterations:");
+assert(musicLoopIterations(60, 60) === 0, "same length needs no loop");
+assert(musicLoopIterations(90, 60) === 0, "longer track needs no loop");
+assert(musicLoopIterations(60, 120) === 1, "2x target needs 1 extra loop");
+assert(musicLoopIterations(60, 300) === 4, "5x target needs 4 extra loops");
+assert(musicLoopIterations(0, 60) === 0, "invalid source duration is 0");
 
 console.log("\ndeleteJobArtifacts:");
 assert(

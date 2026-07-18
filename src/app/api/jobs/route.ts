@@ -14,7 +14,7 @@ import { buildPptx } from "@/lib/pptx/build-pptx";
 import { retimeScenes } from "@/lib/timing";
 import { setJob, updateJob, getJob, listJobs } from "@/lib/jobs/store";
 import { jobToHistoryItem } from "@/lib/jobs/persist";
-import { resolveBackgroundMusic } from "@/lib/music";
+import { resolveBackgroundMusic, prepareLoopedBackgroundMusic } from "@/lib/music";
 import type { Job, OutputFormat, PresentationData } from "@/lib/types";
 
 export async function GET() {
@@ -255,13 +255,25 @@ async function buildVideoOutput(
     await generateVoiceover(
       presentation.narrationScript,
       jobId,
-      cfg.voice
+      cfg.voice,
+      presentation.scenes
     );
 
-  const outputDuration = Math.max(
-    presentation.totalDuration,
-    Math.ceil(voiceoverDuration + 3)
-  );
+  // Keep the requested length when speech covers most of it; otherwise
+  // shrink the video so the viewer is not left with minutes of silence.
+  const closingHold = 3;
+  const requested = presentation.totalDuration;
+  const speechPlusHold = Math.ceil(voiceoverDuration + closingHold);
+  const outputDuration =
+    voiceoverDuration >= requested * 0.85
+      ? Math.max(requested, speechPlusHold)
+      : speechPlusHold;
+
+  if (voiceoverDuration < requested * 0.85) {
+    console.warn(
+      `Job ${jobId}: voiceover is ${voiceoverDuration.toFixed(1)}s vs requested ${requested}s; fitting video to speech length.`
+    );
+  }
 
   presentation.scenes = retimeScenes(presentation.scenes, outputDuration);
   presentation.totalDuration = outputDuration;
@@ -282,7 +294,11 @@ async function buildVideoOutput(
   );
   if (configuredMusicPath) {
     const compositionMusicPath = path.join(assetsDir, "background-music.mp3");
-    await fs.copyFile(configuredMusicPath, compositionMusicPath);
+    await prepareLoopedBackgroundMusic(
+      configuredMusicPath,
+      compositionMusicPath,
+      outputDuration
+    );
     compositionMusicSrc = "assets/background-music.mp3";
   }
 

@@ -961,7 +961,7 @@ function buildAudioTags(cfg: CompositionConfig): string {
   if (cfg.musicPath) {
     const vol = cfg.musicVolume !== undefined ? dbToLinear(cfg.musicVolume) : 0.05;
     tags.push(
-      `    <audio id="background-music" class="clip" src="${cfg.musicPath}" data-start="0" data-duration="${cfg.duration}" data-track-index="2" data-volume="${vol.toFixed(3)}" data-loop="true" data-fade-in="2" data-fade-out="3"></audio>`
+      `    <audio id="background-music" class="clip" src="${cfg.musicPath}" loop data-start="0" data-duration="${cfg.duration}" data-track-index="2" data-volume="${vol.toFixed(3)}" data-loop="true" data-fade-in="2" data-fade-out="3"></audio>`
     );
   }
 

@@ -1,6 +1,10 @@
+import { execFile } from "child_process";
+import { promisify } from "util";
 import fs from "fs/promises";
 import path from "path";
 import { config } from "@/lib/config";
+
+const execFileAsync = promisify(execFile);
 
 export async function listBackgroundMusic(): Promise<string[]> {
   await fs.mkdir(config.dirs.publicAudio, { recursive: true });
@@ -38,4 +42,86 @@ export async function resolveBackgroundMusic(
   }
 
   return path.join(config.dirs.publicAudio, fileName);
+}
+
+export async function probeAudioDurationSeconds(
+  filePath: string
+): Promise<number> {
+  const { stdout } = await execFileAsync(
+    "ffprobe",
+    [
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      filePath,
+    ],
+    { timeout: 30_000 }
+  );
+  const duration = Number.parseFloat(stdout.trim());
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error(`Could not read audio duration for ${filePath}`);
+  }
+  return duration;
+}
+
+/**
+ * How many stream_loop iterations (-1 = infinite) are needed so ffmpeg
+ * can cut a track to at least targetDurationSeconds.
+ */
+export function musicLoopIterations(
+  sourceDurationSeconds: number,
+  targetDurationSeconds: number
+): number {
+  if (
+    !Number.isFinite(sourceDurationSeconds) ||
+    sourceDurationSeconds <= 0 ||
+    !Number.isFinite(targetDurationSeconds) ||
+    targetDurationSeconds <= 0
+  ) {
+    return 0;
+  }
+  if (sourceDurationSeconds >= targetDurationSeconds - 0.05) {
+    return 0;
+  }
+  return Math.ceil(targetDurationSeconds / sourceDurationSeconds) - 1;
+}
+
+/**
+ * Write a background track long enough for the video. Short tracks are
+ * looped with ffmpeg; already-long tracks are trimmed to the target length.
+ */
+export async function prepareLoopedBackgroundMusic(
+  sourcePath: string,
+  outputPath: string,
+  targetDurationSeconds: number
+): Promise<void> {
+  if (targetDurationSeconds <= 0) {
+    throw new Error("Target music duration must be positive");
+  }
+
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+
+  const sourceDuration = await probeAudioDurationSeconds(sourcePath);
+  const loops = musicLoopIterations(sourceDuration, targetDurationSeconds);
+
+  const args = ["-y", "-hide_banner", "-loglevel", "error"];
+  if (loops > 0) {
+    args.push("-stream_loop", String(loops));
+  }
+  args.push(
+    "-i",
+    sourcePath,
+    "-t",
+    targetDurationSeconds.toFixed(3),
+    "-c:a",
+    "libmp3lame",
+    "-q:a",
+    "4",
+    outputPath
+  );
+
+  await execFileAsync("ffmpeg", args, { timeout: 120_000 });
 }

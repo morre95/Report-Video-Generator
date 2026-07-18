@@ -9,9 +9,9 @@ Transform reports and documents into animated video presentations with AI-genera
 - **Multi-Document Upload** — Drag-and-drop up to 10 PDF, DOCX, TXT, or Markdown files (20 MB each, 50 MB combined). Sources are deduplicated and text is balanced across a 200K-character budget so later files are not discarded.
 - **AI Analysis** — Gemini 3.5 Flash through OpenRouter extracts key metrics, charts, and creates a narration script
 - **Optional Web Research** — Tick "Allow online research" to let the AI search the web for supplementary context. Uploaded documents remain the primary source. Adds a small OpenRouter web-search charge per query.
-- **Voiceover** — Gemini 3.1 Flash TTS through OpenRouter generates professional narration with configurable voices
+- **Voiceover** — Gemini 3.1 Flash TTS through OpenRouter generates professional narration with configurable voices. Long scripts are split into short chunks (then concatenated) to avoid truncation and quality drift on multi-minute videos.
 - **Animated Compositions** — Hyperframes renders HTML/CSS/GSAP compositions with charts, KPIs, and transitions
-- **Background Music** — Selectable background music mixed at reduced volume under the voiceover
+- **Background Music** — Selectable background music mixed at reduced volume under the voiceover. Tracks shorter than the video are looped to fill the full duration.
 - **Smart Duration** — Auto mode fits the finished story to 30–180 seconds from its narration and scene count; Manual mode supports 15–300 seconds
 - **Configurable** — Aspect ratio (16:9, 4:3, 9:16, 1:1), FPS, and voice selection
 - **NVIDIA Demo** — Pre-loaded Q1 FY2027 earnings demo

@@ -41,7 +41,7 @@ export async function analyzeReport(
     : `Create ${sceneCount} scenes that tell a complete story arc: hook, context, key findings, deep dives, a concise recap, and conclusion.`;
   const narrationGuidance = autoDuration
     ? `Choose an appropriate narrative scope between 65 and 360 words based on the source material and brief. Prefer a focused short video over padding, but include enough detail to tell a complete story.`
-    : `Keep the full spoken narration to approximately ${targetNarrationWords} words total across all scenes. It must finish naturally before the video ends; do not exceed this budget.`;
+    : `Spoken narration across all scenes must total approximately ${targetNarrationWords} words (aim for ${Math.round(targetNarrationWords * 0.9)}-${Math.round(targetNarrationWords * 1.05)}). Under-writing leaves silent video; do not finish early. It must finish naturally before the video ends.`;
   const timingGuidance = autoDuration
     ? `Recommend a totalDuration between ${AUTO_DURATION_MIN_SECONDS} and ${AUTO_DURATION_MAX_SECONDS} seconds that fits the narration and visuals. Scene durations must sum to that recommendation.`
     : `Scene durations must sum to exactly ${durationSeconds}.`;
