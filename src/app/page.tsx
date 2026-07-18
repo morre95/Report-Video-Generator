@@ -133,6 +133,9 @@ export default function Home() {
     error: null,
   });
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoAspectRatio, setVideoAspectRatio] = useState<AspectRatio | null>(
+    null
+  );
   const [pptxUrl, setPptxUrl] = useState<string | null>(null);
   const [pptxPreview, setPptxPreview] = useState<PptxPreviewState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -317,13 +320,21 @@ export default function Home() {
 
           if (data.status === "complete") {
             if (pollRef.current) clearInterval(pollRef.current);
-            setVideoUrl(data.outputPath ? `/api/jobs/${jobId}/render` : null);
+            const hasVideo = !!data.outputPath;
+            setVideoUrl(hasVideo ? `/api/jobs/${jobId}/render` : null);
+            setVideoAspectRatio(
+              hasVideo
+                ? ((data.config?.aspectRatio as AspectRatio | undefined) ??
+                    "16:9")
+                : null
+            );
             setPptxUrl(data.pptxPath ? `/api/jobs/${jobId}/pptx` : null);
             void loadPptxPreview(jobId, !!data.pptxPath);
             void refreshHistory();
           } else if (data.status === "error") {
             if (pollRef.current) clearInterval(pollRef.current);
             setPptxPreview(null);
+            setVideoAspectRatio(null);
             void refreshHistory();
           }
         } catch {
@@ -341,6 +352,7 @@ export default function Home() {
       if (!isTerminal) {
         setPptxPreview(null);
         setVideoUrl(null);
+        setVideoAspectRatio(null);
         setPptxUrl(null);
         pollJob(item.id);
         setJob({
@@ -369,9 +381,11 @@ export default function Home() {
           hasVideo: !!data.outputPath,
           hasPptx: !!data.pptxPath,
         });
-        setVideoUrl(
-          data.status === "complete" && data.outputPath
-            ? `/api/jobs/${item.id}/render`
+        const hasVideo = data.status === "complete" && !!data.outputPath;
+        setVideoUrl(hasVideo ? `/api/jobs/${item.id}/render` : null);
+        setVideoAspectRatio(
+          hasVideo
+            ? ((data.config?.aspectRatio as AspectRatio | undefined) ?? "16:9")
             : null
         );
         const hasPptx = data.status === "complete" && !!data.pptxPath;
@@ -415,6 +429,7 @@ export default function Home() {
 
     setJob({ id: null, status: "uploading", progress: 5, error: null });
     setVideoUrl(null);
+    setVideoAspectRatio(null);
     setPptxUrl(null);
     setPptxPreview(null);
 
@@ -1256,7 +1271,10 @@ export default function Home() {
                     style={{
                       border: "1px solid var(--border)",
                       background: "#000",
-                      aspectRatio: aspectRatio.replace(":", "/"),
+                      aspectRatio: (videoAspectRatio ?? "16:9").replace(
+                        ":",
+                        "/"
+                      ),
                     }}
                   >
                     <video
